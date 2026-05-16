@@ -1,6 +1,6 @@
 {
   "name": "@usetemi/codex-sdk",
-  "version": "0.130.0",
+  "version": "0.130.0-1",
   "description": "Temi convenience SDK and low-level transport helpers for Codex.",
   "type": "module",
   "license": "MIT",
@@ -44,6 +44,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.24.0",
+    "@openai/codex": "0.130.0",
     "@openai/codex-sdk": "^0.130.0"
   },
   "devDependencies": {
