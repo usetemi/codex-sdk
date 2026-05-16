@@ -1,0 +1,201 @@
+name: Release
+
+on:
+  release:
+    types:
+      - published
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release version, with or without leading v
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ inputs.version || github.event.release.tag_name || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            version="${{ inputs.version }}"
+          else
+            version="${{ github.event.release.tag_name }}"
+          fi
+
+          version="${version#v}"
+          python3 scripts/release_versions.py --expect "${version}"
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+
+  checks:
+    needs: validate
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v6
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: "28"
+          elixir-version: "1.19"
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: packages/go/go.mod
+      - run: npm install
+      - run: mix deps.get
+        working-directory: packages/elixir
+      - run: npm run check
+
+  build-npm:
+    needs:
+      - validate
+      - checks
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+      - run: npm install
+      - run: npm --workspace @usetemi/codex-sdk run build
+      - run: mkdir -p dist/npm
+      - run: npm pack --workspace @usetemi/codex-sdk --pack-destination dist/npm
+      - uses: actions/upload-artifact@v4
+        with:
+          name: npm-package
+          path: dist/npm/*.tgz
+          if-no-files-found: error
+
+  publish-npm:
+    needs:
+      - validate
+      - build-npm
+    runs-on: ubuntu-24.04
+    environment: npm
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      NPM_ACCESS: ${{ vars.NPM_ACCESS || 'public' }}
+      NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: npm-package
+          path: dist/npm
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          registry-url: https://registry.npmjs.org
+      - run: npm publish dist/npm/*.tgz --access "${NPM_ACCESS}"
+
+  build-python:
+    needs:
+      - validate
+      - checks
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v6
+      - run: uv build --project packages/python
+      - uses: actions/upload-artifact@v4
+        with:
+          name: python-package
+          path: packages/python/dist/*
+          if-no-files-found: error
+
+  publish-pypi:
+    needs:
+      - validate
+      - build-python
+    runs-on: ubuntu-24.04
+    environment: pypi
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: python-package
+          path: dist/python
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/python
+
+  publish-hex:
+    needs:
+      - validate
+      - checks
+    runs-on: ubuntu-24.04
+    environment: hex
+    env:
+      HEX_API_KEY: ${{ secrets.HEX_API_KEY }}
+      HEX_ORGANIZATION: ${{ vars.HEX_ORGANIZATION }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: "28"
+          elixir-version: "1.19"
+      - run: mix deps.get
+        working-directory: packages/elixir
+      - name: Publish Hex package
+        working-directory: packages/elixir
+        run: |
+          args=(hex.publish package --yes)
+          if [ -n "${HEX_ORGANIZATION}" ]; then
+            args+=(--organization "${HEX_ORGANIZATION}")
+          fi
+          mix "${args[@]}"
+
+  publish-go:
+    needs:
+      - validate
+      - checks
+    runs-on: ubuntu-24.04
+    environment: go
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Publish Go module tag
+        run: |
+          go_tag="packages/go/v${{ needs.validate.outputs.version }}"
+          head_sha=$(git rev-parse HEAD)
+
+          if git ls-remote --exit-code --tags origin "refs/tags/${go_tag}" >/tmp/go-tag >/dev/null 2>&1; then
+            tag_sha=$(awk '{print $1}' /tmp/go-tag)
+            if [ "${tag_sha}" != "${head_sha}" ]; then
+              echo "Tag ${go_tag} already exists at ${tag_sha}, expected ${head_sha}" >&2
+              exit 1
+            fi
+
+            echo "Tag ${go_tag} already exists at ${head_sha}"
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag "${go_tag}" "${head_sha}"
+          git push origin "refs/tags/${go_tag}"

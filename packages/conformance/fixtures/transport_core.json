@@ -1,0 +1,68 @@
+{
+  "name": "transport-core",
+  "request": {
+    "id": "req-1",
+    "method": "initialize",
+    "params": {
+      "capabilities": {
+        "experimentalApi": true
+      },
+      "clientInfo": {
+        "name": "usetemi-codex-sdk",
+        "title": "Temi Codex SDK",
+        "version": "0.1.0"
+      }
+    }
+  },
+  "requestLine": "{\"id\":\"req-1\",\"method\":\"initialize\",\"params\":{\"capabilities\":{\"experimentalApi\":true},\"clientInfo\":{\"name\":\"usetemi-codex-sdk\",\"title\":\"Temi Codex SDK\",\"version\":\"0.1.0\"}}}\n",
+  "chunks": [
+    "{\"id\":\"req-1\",\"result\":{\"protocolVersion\":\"2\"}}\n{\"method\":\"thread/started\",\"params\":{\"threadId\":\"thread-1\"}}\n{\"id\":\"bad\"",
+    ",\"result\":",
+    "not-json}\n",
+    "{\"id\":\"req-2\",\"result\":{\"ok\":true}}\n"
+  ],
+  "decodedMessages": [
+    {
+      "id": "req-1",
+      "result": {
+        "protocolVersion": "2"
+      }
+    },
+    {
+      "method": "thread/started",
+      "params": {
+        "threadId": "thread-1"
+      }
+    },
+    {
+      "id": "req-2",
+      "result": {
+        "ok": true
+      }
+    }
+  ],
+  "malformedLines": [
+    "{\"id\":\"bad\",\"result\":not-json}"
+  ],
+  "router": {
+    "expectedResponseId": "req-1",
+    "response": {
+      "id": "req-1",
+      "result": {
+        "protocolVersion": "2"
+      }
+    },
+    "notification": {
+      "method": "thread/started",
+      "params": {
+        "threadId": "thread-1"
+      }
+    },
+    "orphanResponse": {
+      "id": "req-2",
+      "result": {
+        "ok": true
+      }
+    }
+  }
+}

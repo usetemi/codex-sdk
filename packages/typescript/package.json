@@ -1,0 +1,56 @@
+{
+  "name": "@usetemi/codex-sdk",
+  "version": "0.130.0",
+  "description": "Temi convenience SDK and low-level transport helpers for Codex.",
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/usetemi/codex-sdk.git",
+    "directory": "packages/typescript"
+  },
+  "homepage": "https://github.com/usetemi/codex-sdk#readme",
+  "bugs": {
+    "url": "https://github.com/usetemi/codex-sdk/issues"
+  },
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org/"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./transport": {
+      "types": "./dist/transport.d.ts",
+      "import": "./dist/transport.js"
+    }
+  },
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "format:check": "oxfmt --check src tests",
+    "lint": "oxlint src tests",
+    "static": "npm run format:check && npm run lint && npm run typecheck",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "tsx --test tests/*.test.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.24.0",
+    "@openai/codex-sdk": "^0.130.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.0",
+    "oxfmt": "^0.50.0",
+    "oxlint": "^1.65.0",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3"
+  }
+}

@@ -1,0 +1,41 @@
+[build-system]
+requires = ["hatchling>=1.24.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "usetemi-codex-sdk"
+version = "0.130.0"
+description = "Temi convenience SDK and low-level transport helpers for Codex."
+readme = "README.md"
+requires-python = ">=3.12"
+license = "MIT"
+license-files = ["LICENSE"]
+classifiers = [
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.12",
+]
+dependencies = []
+
+[project.urls]
+Repository = "https://github.com/usetemi/codex-sdk"
+Issues = "https://github.com/usetemi/codex-sdk/issues"
+
+[dependency-groups]
+dev = [
+  "ruff>=0.15.13",
+  "ty>=0.0.36",
+]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "C4", "UP"]
+
+[tool.ty]
+environment = { python-version = "3.12" }
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/usetemi_codex_sdk"]

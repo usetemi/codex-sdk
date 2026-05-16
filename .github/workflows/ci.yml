@@ -1,0 +1,94 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  typescript:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+      - run: npm install
+      - run: npm run typescript:static
+      - run: npm --workspace @usetemi/codex-sdk test
+
+  python:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v6
+      - run: npm run release:test
+      - run: npm run python:static
+      - run: npm run python:test
+
+  elixir:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: "28"
+          elixir-version: "1.19"
+      - run: mix deps.get
+        working-directory: packages/elixir
+      - run: mix static
+        working-directory: packages/elixir
+      - run: mix test
+        working-directory: packages/elixir
+
+  go:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: packages/go/go.mod
+      - run: npm run go:static
+      - run: npm run go:test
+
+  codex-version-matrix:
+    runs-on: ubuntu-24.04
+    outputs:
+      versions: ${{ steps.versions.outputs.versions }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: versions
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          versions=$(
+            {
+              printf 'latest\n'
+              python scripts/codex_versions.py | sed 's/^rust-v//'
+            } | awk '!seen[$0]++' | jq -R -s -c 'split("\n") | map(select(length > 0))'
+          )
+          echo "versions=${versions}" >> "${GITHUB_OUTPUT}"
+
+  codex-schema-smoke:
+    needs: codex-version-matrix
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        codex-version: ${{ fromJson(needs.codex-version-matrix.outputs.versions) }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          if [ "${{ matrix.codex-version }}" = "latest" ]; then
+            npm install -g @openai/codex@latest
+          else
+            npm install -g "@openai/codex@${{ matrix.codex-version }}"
+          fi
+      - run: codex --version
+      - run: codex app-server generate-json-schema --out /tmp/codex-schema
+      - run: codex app-server generate-ts --out /tmp/codex-ts --experimental

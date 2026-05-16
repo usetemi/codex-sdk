@@ -1,0 +1,131 @@
+{
+  "name": "transport-expanded",
+  "framingCases": [
+    {
+      "name": "crlf-empty-nonobject-and-numeric-id",
+      "chunks": [
+        "\r\n{\"method\":\"note/withParams\",\"params\":{\"ok\":true}}\r\n[]\n{\"id\":7,\"result\":\"ok\"}\n"
+      ],
+      "decodedMessages": [
+        {
+          "method": "note/withParams",
+          "params": {
+            "ok": true
+          }
+        },
+        {
+          "id": 7,
+          "result": "ok"
+        }
+      ],
+      "malformedLines": [
+        "[]"
+      ],
+      "pending": ""
+    },
+    {
+      "name": "partial-trailing-message",
+      "chunks": [
+        "{\"id\":\"req-error\",\"error\":{\"code\":-32000,\"message\":\"boom\",\"data\":{\"retry\":false}}}\n{\"method\":\"note/partial\",\"params\":{\"items\":[1,2]}}\n{\"unfinished\":",
+        "true"
+      ],
+      "decodedMessages": [
+        {
+          "id": "req-error",
+          "error": {
+            "code": -32000,
+            "message": "boom",
+            "data": {
+              "retry": false
+            }
+          }
+        },
+        {
+          "method": "note/partial",
+          "params": {
+            "items": [
+              1,
+              2
+            ]
+          }
+        }
+      ],
+      "malformedLines": [],
+      "pending": "{\"unfinished\":true"
+    }
+  ],
+  "router": {
+    "expectedResponseIds": [
+      "req-ok",
+      "req-error",
+      7
+    ],
+    "messages": [
+      {
+        "id": "req-ok",
+        "result": {
+          "ok": true
+        }
+      },
+      {
+        "id": "req-error",
+        "error": {
+          "code": -32000,
+          "message": "boom"
+        }
+      },
+      {
+        "id": "server-1",
+        "method": "fake/serverRequest",
+        "params": {
+          "question": "approve?"
+        }
+      },
+      {
+        "method": "fake/notification",
+        "params": {
+          "ok": true
+        }
+      },
+      {
+        "id": 7,
+        "result": "numeric"
+      },
+      {
+        "result": "missing id"
+      }
+    ],
+    "routes": [
+      {
+        "type": "response",
+        "id": "req-ok"
+      },
+      {
+        "type": "errorResponse",
+        "id": "req-error"
+      },
+      {
+        "type": "serverRequest",
+        "id": "server-1"
+      },
+      {
+        "type": "notification"
+      },
+      {
+        "type": "response",
+        "id": 7
+      },
+      {
+        "type": "unknown"
+      }
+    ],
+    "notifications": [
+      {
+        "method": "fake/notification",
+        "params": {
+          "ok": true
+        }
+      }
+    ]
+  }
+}
