@@ -17,6 +17,9 @@ on:
         options:
           - all
           - npm
+          - pypi
+          - hex
+          - go
 
 permissions:
   contents: read
@@ -122,7 +125,7 @@ jobs:
           npm "${args[@]}"
 
   build-python:
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.publish_target == 'all' }}
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.publish_target == 'all' || inputs.publish_target == 'pypi' }}
     needs:
       - validate
       - checks
@@ -141,7 +144,7 @@ jobs:
           if-no-files-found: error
 
   publish-pypi:
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.publish_target == 'all' }}
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.publish_target == 'all' || inputs.publish_target == 'pypi' }}
     needs:
       - validate
       - build-python
@@ -160,7 +163,7 @@ jobs:
           packages-dir: dist/python
 
   publish-hex:
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.publish_target == 'all' }}
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.publish_target == 'all' || inputs.publish_target == 'hex' }}
     needs:
       - validate
       - checks
@@ -187,7 +190,7 @@ jobs:
           mix "${args[@]}"
 
   publish-go:
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.publish_target == 'all' }}
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.publish_target == 'all' || inputs.publish_target == 'go' }}
     needs:
       - validate
       - checks
