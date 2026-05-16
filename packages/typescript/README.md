@@ -8,7 +8,7 @@ TypeScript wrapper around upstream `@openai/codex-sdk`, plus low-level transport
 npm install @usetemi/codex-sdk
 ```
 
-Package versions track the stable Codex version they target. Version `0.130.0-2` targets Codex `0.130.0`.
+Package versions track the stable Codex version they target. Version `0.130.0-3` targets Codex `0.130.0`.
 
 ## Usage
 

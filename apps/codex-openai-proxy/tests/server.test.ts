@@ -1,10 +1,24 @@
 import assert from "node:assert/strict";
+import { promises as fs } from "node:fs";
 import { type Server } from "node:http";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 
 import { FakeAppServer } from "../../../packages/typescript/tests/support/openai-compat-fixture";
+import {
+  CodexAuthConflictError,
+  type CodexAuthImportResult,
+  type CodexAuthManager,
+  type CodexAuthStatus,
+  type CodexDeviceFlowSnapshot,
+} from "../src/codex-auth.js";
 import { parseCliConfig, type CliConfig } from "../src/config.js";
-import { createCodexOpenAIProxyServer, openAICompatOptionsFromConfig } from "../src/server.js";
+import {
+  createCodexOpenAIProxyServer,
+  openAICompatOptionsFromConfig,
+  type ProxyServerOptions,
+} from "../src/server.js";
 
 test("GET /healthz does not initialize Codex", async (t) => {
   const fake = new FakeAppServer();
@@ -143,6 +157,127 @@ test("explicit disabled auth permits unauthenticated non-loopback configuration"
   assert.equal(response.status, 200);
 });
 
+test("GET /auth.md is public markdown guidance", async (t) => {
+  const fake = new FakeAppServer();
+  const config = parseCliConfig(["--api-key", "good-token"], {});
+  const baseUrl = await startProxyFixture(t, fake, config);
+
+  const response = await fetch(`${baseUrl}/auth.md`);
+  assert.equal(response.status, 200);
+  assert.match(response.headers.get("content-type") ?? "", /text\/markdown/);
+  assert.match(await response.text(), /auth\/device/);
+});
+
+test("auth management endpoints use proxy bearer auth", async (t) => {
+  const fake = new FakeAppServer();
+  const authManager = new FakeAuthManager();
+  const config = parseCliConfig(["--api-key", "good-token"], {});
+  const baseUrl = await startProxyFixture(t, fake, config, { authManager });
+
+  const missing = await fetch(`${baseUrl}/auth/status`);
+  assert.equal(missing.status, 401);
+
+  const invalid = await fetch(`${baseUrl}/auth/status`, {
+    headers: { authorization: "Bearer bad-token" },
+  });
+  assert.equal(invalid.status, 401);
+
+  const valid = await fetch(`${baseUrl}/auth/status`, {
+    headers: { authorization: "Bearer good-token" },
+  });
+  assert.equal(valid.status, 200);
+  assert.deepEqual(await valid.json(), {
+    authenticated: false,
+    message: "Not logged in",
+  });
+});
+
+test("device auth flow starts, polls, cancels, and rejects concurrent starts", async (t) => {
+  const fake = new FakeAppServer();
+  const authManager = new FakeAuthManager();
+  const config = parseCliConfig(["--api-key", "good-token"], {});
+  const baseUrl = await startProxyFixture(t, fake, config, { authManager });
+  const headers = { authorization: "Bearer good-token" };
+
+  const started = await fetch(`${baseUrl}/auth/device`, { method: "POST", headers });
+  assert.equal(started.status, 202);
+  const startJson = assertRecord(await started.json());
+  assert.equal(startJson.status, "pending");
+  assert.equal(startJson.verification_uri, "https://auth.openai.com/codex/device");
+
+  authManager.conflictOnStart = true;
+  const conflict = await fetch(`${baseUrl}/auth/device`, { method: "POST", headers });
+  assert.equal(conflict.status, 409);
+
+  const flowId = String(startJson.flow_id);
+  const polled = await fetch(`${baseUrl}/auth/device/${flowId}`, { headers });
+  assert.equal(polled.status, 200);
+  assert.equal(assertRecord(await polled.json()).user_code, "ABCD-EFGH");
+
+  const cancelled = await fetch(`${baseUrl}/auth/device/${flowId}/cancel`, {
+    method: "POST",
+    headers,
+  });
+  assert.equal(cancelled.status, 200);
+  assert.equal(assertRecord(await cancelled.json()).status, "cancelled");
+});
+
+test("auth import rejects invalid JSON", async (t) => {
+  const fake = new FakeAppServer();
+  const config = parseCliConfig(["--api-key", "good-token"], {});
+  const baseUrl = await startProxyFixture(t, fake, config);
+
+  const response = await fetch(`${baseUrl}/auth/import`, {
+    method: "POST",
+    headers: {
+      authorization: "Bearer good-token",
+      "content-type": "application/json",
+    },
+    body: "{",
+  });
+  assert.equal(response.status, 400);
+});
+
+test("auth import writes managed auth JSON and restarts Codex app-server", async (t) => {
+  const first = new CloseCountingFakeAppServer();
+  const second = new CloseCountingFakeAppServer();
+  const fakes = [first, second];
+  let fakeIndex = 0;
+  const codexHome = await fs.mkdtemp(path.join(os.tmpdir(), "codex-proxy-auth-"));
+  t.after(async () => {
+    await fs.rm(codexHome, { recursive: true, force: true });
+  });
+  const config = parseCliConfig(["--api-key", "good-token", "--codex-home", codexHome], {});
+  const baseUrl = await startProxyFixture(t, first, config, {
+    compat: () => ({ client: fakes[fakeIndex++] ?? new CloseCountingFakeAppServer() }),
+  });
+  const headers = { authorization: "Bearer good-token" };
+
+  const before = await fetch(`${baseUrl}/v1/models`, { headers });
+  assert.equal(before.status, 200);
+  assert.equal(first.requests[0]?.method, "initialize");
+
+  const imported = await fetch(`${baseUrl}/auth/import`, {
+    method: "POST",
+    headers: {
+      ...headers,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({ OPENAI_API_KEY: "secret", refresh_token: "refresh" }),
+  });
+  assert.equal(imported.status, 200);
+  assert.equal(assertRecord(await imported.json()).restarted_codex, true);
+  assert.equal(first.closeCount, 1);
+  assert.deepEqual(JSON.parse(await fs.readFile(path.join(codexHome, "auth.json"), "utf8")), {
+    OPENAI_API_KEY: "secret",
+    refresh_token: "refresh",
+  });
+
+  const after = await fetch(`${baseUrl}/v1/models`, { headers });
+  assert.equal(after.status, 200);
+  assert.equal(second.requests[0]?.method, "initialize");
+});
+
 test("Codex subprocess env passes Codex auth but not proxy client tokens", () => {
   const previousProxyKeys = process.env.CODEX_OPENAI_PROXY_API_KEYS;
   process.env.CODEX_OPENAI_PROXY_API_KEYS = "proxy-secret";
@@ -176,8 +311,12 @@ async function startProxyFixture(
   t: { after: (fn: () => void | Promise<void>) => void },
   fake: FakeAppServer,
   config: CliConfig = parseCliConfig([], {}),
+  options: ProxyServerOptions = {},
 ): Promise<string> {
-  const server = createCodexOpenAIProxyServer(config, { compat: { client: fake } });
+  const server = createCodexOpenAIProxyServer(config, {
+    compat: { client: fake },
+    ...options,
+  });
   await new Promise<void>((resolve) => {
     server.listen(0, "127.0.0.1", resolve);
   });
@@ -196,6 +335,72 @@ class FailingInitializeAppServer extends FakeAppServer {
     this.requests.push({ method, params });
     throw new Error("initialize failed");
   }
+}
+
+class CloseCountingFakeAppServer extends FakeAppServer {
+  closeCount = 0;
+
+  override async close(): Promise<void> {
+    this.closeCount += 1;
+    await super.close();
+  }
+}
+
+class FakeAuthManager implements CodexAuthManager {
+  conflictOnStart = false;
+  #flow = {
+    flow_id: "flow-1",
+    status: "pending" as const,
+    started_at: new Date(0).toISOString(),
+    updated_at: new Date(0).toISOString(),
+    verification_uri: "https://auth.openai.com/codex/device",
+    user_code: "ABCD-EFGH",
+    expires_at: new Date(15 * 60_000).toISOString(),
+    message: "Open the verification URL and enter the device code",
+    output_lines: ["Open https://auth.openai.com/codex/device", "Enter ABCD-EFGH"],
+  };
+
+  async status(): Promise<CodexAuthStatus> {
+    return {
+      authenticated: false,
+      message: "Not logged in",
+    };
+  }
+
+  async startDeviceFlow(): Promise<CodexDeviceFlowSnapshot> {
+    if (this.conflictOnStart) {
+      throw new CodexAuthConflictError("A Codex device login flow is already active");
+    }
+    return { ...this.#flow, output_lines: [...this.#flow.output_lines] };
+  }
+
+  async getDeviceFlow(flowId: string): Promise<CodexDeviceFlowSnapshot | undefined> {
+    if (flowId !== this.#flow.flow_id) {
+      return undefined;
+    }
+    return { ...this.#flow, output_lines: [...this.#flow.output_lines] };
+  }
+
+  async cancelDeviceFlow(flowId: string): Promise<CodexDeviceFlowSnapshot | undefined> {
+    if (flowId !== this.#flow.flow_id) {
+      return undefined;
+    }
+    return {
+      ...this.#flow,
+      status: "cancelled",
+      message: "Device login flow cancelled",
+      output_lines: [...this.#flow.output_lines],
+    };
+  }
+
+  async importAuthJson(_rawJson: string): Promise<CodexAuthImportResult> {
+    return {
+      status: "imported",
+      restarted_codex: true,
+    };
+  }
+
+  async close(): Promise<void> {}
 }
 
 function closeServer(server: Server): Promise<void> {

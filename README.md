@@ -31,13 +31,13 @@ Shared fixtures:
 TypeScript SDK:
 
 ```bash
-npm install @usetemi/codex-sdk@0.130.0-2
+npm install @usetemi/codex-sdk@0.130.0-3
 ```
 
 Codex OpenAI proxy from npm:
 
 ```bash
-npx @usetemi/codex-openai-proxy@0.130.0-2 --api-key local-proxy-token
+npx @usetemi/codex-openai-proxy@0.130.0-3 --api-key local-proxy-token
 ```
 
 Python SDK:
@@ -51,7 +51,7 @@ Elixir SDK:
 ```elixir
 def deps do
   [
-    {:usetemi_codex_sdk, "0.130.0-2"}
+    {:usetemi_codex_sdk, "0.130.0-3"}
   ]
 end
 ```
@@ -63,33 +63,52 @@ mix deps.get
 Go SDK:
 
 ```bash
-go get github.com/usetemi/codex-sdk/packages/go@v0.130.0-2
+go get github.com/usetemi/codex-sdk/packages/go@v0.130.0-3
 ```
 
 ## Codex OpenAI Proxy
 
-`@usetemi/codex-openai-proxy` runs Codex app-server behind an OpenAI-compatible `/v1` HTTP API for standard OpenAI clients.
+`@usetemi/codex-openai-proxy` runs Codex app-server behind an OpenAI-compatible `/v1` HTTP API for standard OpenAI clients. It also exposes `/auth/*` endpoints so an operator or web app can re-auth the service-wide Codex identity without redeploying.
 
-The GHCR image is public and can be pulled without `docker login`. Run it with Codex API-key auth:
+The GHCR image is public and can be pulled without `docker login`. Run it with managed web re-auth and persisted proxy data:
+
+```bash
+docker run --rm -p 8080:8080 \
+  -e CODEX_OPENAI_PROXY_API_KEYS=local-proxy-token \
+  -v codex-openai-proxy-data:/data \
+  ghcr.io/usetemi/codex-openai-proxy:0.130.0-3
+```
+
+Open `http://127.0.0.1:8080/auth.md` for browser and API instructions, or start the device-login flow directly:
+
+```bash
+curl -X POST \
+  -H "Authorization: Bearer local-proxy-token" \
+  http://127.0.0.1:8080/auth/device
+```
+
+Credential changes restart the underlying Codex app-server connection, so active `/v1` requests can fail during re-auth.
+
+You can still run with Codex API-key auth:
 
 ```bash
 docker run --rm -p 8080:8080 \
   -e CODEX_OPENAI_PROXY_API_KEYS=local-proxy-token \
   -e CODEX_API_KEY="$CODEX_API_KEY" \
-  ghcr.io/usetemi/codex-openai-proxy:0.130.0-2
+  ghcr.io/usetemi/codex-openai-proxy:0.130.0-3
 ```
 
-Or mount persisted `codex login` state:
+Or mount existing `codex login` state:
 
 ```bash
 docker run --rm -p 8080:8080 \
   -e CODEX_OPENAI_PROXY_API_KEYS=local-proxy-token \
   -e CODEX_HOME=/codex-home \
   -v codex-home:/codex-home \
-  ghcr.io/usetemi/codex-openai-proxy:0.130.0-2
+  ghcr.io/usetemi/codex-openai-proxy:0.130.0-3
 ```
 
-Point OpenAI clients at `http://127.0.0.1:8080/v1` and use `local-proxy-token` as the client API key. That token authenticates callers to the proxy only; Codex auth comes from `CODEX_API_KEY` or the mounted `CODEX_HOME`.
+Point OpenAI clients at `http://127.0.0.1:8080/v1` and use `local-proxy-token` as the client API key. That token authenticates callers to the proxy only; Codex auth comes from managed proxy storage, `CODEX_API_KEY`, or an explicit `CODEX_HOME`.
 
 ## Compatibility
 

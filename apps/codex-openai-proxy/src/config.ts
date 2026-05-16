@@ -1,4 +1,6 @@
 import net from "node:net";
+import os from "node:os";
+import path from "node:path";
 
 import type { OpenAICompatOptions } from "@usetemi/codex-sdk/openai-compat";
 
@@ -18,6 +20,7 @@ export type CliConfig = {
   port: number;
   auth: AuthConfig;
   codexCommand: string;
+  dataDir: string;
   codexHome?: string;
   codexApiKey?: string;
   cwd?: string;
@@ -35,6 +38,7 @@ type FlagName =
   | "codex-command"
   | "codex-home"
   | "cwd"
+  | "data-dir"
   | "host"
   | "model"
   | "model-provider"
@@ -51,6 +55,7 @@ const flagNames = new Set<FlagName>([
   "codex-command",
   "codex-home",
   "cwd",
+  "data-dir",
   "host",
   "model",
   "model-provider",
@@ -88,6 +93,10 @@ export function parseCliConfig(
       envValue(env.CODEX_OPENAI_PROXY_APPROVAL_POLICY) ??
       "never",
   );
+  const dataDir =
+    flagValue(flags, "data-dir") ?? envValue(env.CODEX_OPENAI_PROXY_DATA_DIR) ?? defaultDataDir();
+  const codexHome =
+    flagValue(flags, "codex-home") ?? envValue(env.CODEX_HOME) ?? path.join(dataDir, "codex-home");
 
   return {
     host,
@@ -97,7 +106,8 @@ export function parseCliConfig(
       flagValue(flags, "codex-command") ??
       envValue(env.CODEX_OPENAI_PROXY_CODEX_COMMAND) ??
       "codex",
-    codexHome: flagValue(flags, "codex-home") ?? envValue(env.CODEX_HOME),
+    dataDir,
+    codexHome,
     codexApiKey: flagValue(flags, "codex-api-key") ?? envValue(env.CODEX_API_KEY),
     cwd: flagValue(flags, "cwd") ?? envValue(env.CODEX_OPENAI_PROXY_CWD),
     model: flagValue(flags, "model") ?? envValue(env.CODEX_OPENAI_PROXY_MODEL),
@@ -124,6 +134,7 @@ export function formatUsage(): string {
     "  --codex-command <command>     Codex executable (default: codex)",
     "  --codex-home <path>           CODEX_HOME for the Codex subprocess",
     "  --codex-api-key <token>       CODEX_API_KEY for the Codex subprocess",
+    "  --data-dir <path>             Managed proxy data directory",
     "  --cwd <path>                  Working directory for Codex turns",
     "  --model <model>               Default Codex model",
     "  --model-provider <provider>   Default Codex model provider",
@@ -131,6 +142,10 @@ export function formatUsage(): string {
     "  --approval-policy <policy>    untrusted, on-failure, on-request, or never",
     "  -h, --help                    Show this help",
   ].join("\n");
+}
+
+function defaultDataDir(): string {
+  return path.join(os.homedir(), ".local", "share", "codex-openai-proxy");
 }
 
 function parseFlags(argv: readonly string[]): ParsedFlags {

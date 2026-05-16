@@ -18,6 +18,8 @@ test("flags override env and app-specific port overrides PORT", () => {
       "/tmp/codex-home-flag",
       "--codex-api-key",
       "codex-api-flag",
+      "--data-dir",
+      "/tmp/proxy-data-flag",
       "--cwd",
       "/tmp/project",
       "--model",
@@ -37,6 +39,7 @@ test("flags override env and app-specific port overrides PORT", () => {
       CODEX_OPENAI_PROXY_CODEX_COMMAND: "codex-env",
       CODEX_HOME: "/tmp/codex-home-env",
       CODEX_API_KEY: "codex-api-env",
+      CODEX_OPENAI_PROXY_DATA_DIR: "/tmp/proxy-data-env",
       CODEX_OPENAI_PROXY_CWD: "/tmp/env-project",
       CODEX_OPENAI_PROXY_MODEL: "env-model",
       CODEX_OPENAI_PROXY_MODEL_PROVIDER: "env-provider",
@@ -51,6 +54,7 @@ test("flags override env and app-specific port overrides PORT", () => {
   assert.equal(config.codexCommand, "codex-dev");
   assert.equal(config.codexHome, "/tmp/codex-home-flag");
   assert.equal(config.codexApiKey, "codex-api-flag");
+  assert.equal(config.dataDir, "/tmp/proxy-data-flag");
   assert.equal(config.cwd, "/tmp/project");
   assert.equal(config.model, "codex-mini");
   assert.equal(config.modelProvider, "openai");
@@ -107,4 +111,15 @@ test("loopback default permits local unauthenticated use", () => {
 
   assert.equal(config.host, "127.0.0.1");
   assert.deepEqual(config.auth, { mode: "disabled" });
+  assert.match(config.dataDir, /codex-openai-proxy$/);
+  assert.match(config.codexHome ?? "", /codex-openai-proxy\/codex-home$/);
+});
+
+test("managed codex home comes from data dir when CODEX_HOME is unset", () => {
+  const config = parseCliConfig([], {
+    CODEX_OPENAI_PROXY_DATA_DIR: "/tmp/proxy-data",
+  });
+
+  assert.equal(config.dataDir, "/tmp/proxy-data");
+  assert.equal(config.codexHome, "/tmp/proxy-data/codex-home");
 });

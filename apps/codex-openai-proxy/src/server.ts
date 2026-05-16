@@ -7,12 +7,17 @@ import {
   type OpenAICompatOptions,
 } from "@usetemi/codex-sdk/openai-compat";
 
+import {
+  CodexAuthBadRequestError,
+  CodexAuthConflictError,
+  createCodexAuthManager,
+  type CodexAuthManager,
+} from "./codex-auth.js";
 import type { AuthConfig, CliConfig } from "./config.js";
 
-type JsonRecord = Record<string, unknown>;
-
 export type ProxyServerOptions = {
-  compat?: OpenAICompatOptions;
+  authManager?: CodexAuthManager;
+  compat?: OpenAICompatOptions | (() => OpenAICompatOptions);
 };
 
 export type CodexOpenAIProxyHandler = {
@@ -37,14 +42,17 @@ export function createCodexOpenAIProxyHandler(
   config: CliConfig,
   options: ProxyServerOptions = {},
 ): CodexOpenAIProxyHandler {
-  const compatHandler = createOpenAICompatHandler({
-    ...openAICompatOptionsFromConfig(config),
-    ...options.compat,
-    bearerToken: undefined,
-  });
+  const compatHandler = new RestartableOpenAICompatHandler(config, options.compat);
+  const authManager =
+    options.authManager ??
+    createCodexAuthManager(config, {
+      onCredentialsChanged: async () => {
+        await compatHandler.restart();
+      },
+    });
 
   const handler = ((req: IncomingMessage, res: ServerResponse) => {
-    void handleProxyRequest(req, res, config.auth, compatHandler);
+    void handleProxyRequest(req, res, config.auth, compatHandler, authManager);
   }) as CodexOpenAIProxyHandler;
 
   handler.ready = async () => {
@@ -52,6 +60,7 @@ export function createCodexOpenAIProxyHandler(
   };
   handler.close = async () => {
     await compatHandler.close();
+    await authManager.close();
   };
 
   return handler;
@@ -76,7 +85,8 @@ async function handleProxyRequest(
   req: IncomingMessage,
   res: ServerResponse,
   auth: AuthConfig,
-  compatHandler: OpenAICompatHandler,
+  compatHandler: RestartableOpenAICompatHandler,
+  authManager: CodexAuthManager,
 ): Promise<void> {
   try {
     const url = new URL(req.url ?? "/", "http://localhost");
@@ -96,13 +106,28 @@ async function handleProxyRequest(
       return;
     }
 
+    if (req.method === "GET" && url.pathname === "/auth.md") {
+      sendMarkdown(res, 200, authGuideMarkdown());
+      return;
+    }
+
+    if (url.pathname.startsWith("/auth/")) {
+      if (!isAuthorized(req, auth)) {
+        sendOpenAIError(res, 401, "Missing or invalid bearer token", "invalid_request_error", null);
+        return;
+      }
+
+      await handleAuthRequest(req, res, url, authManager);
+      return;
+    }
+
     if (url.pathname.startsWith("/v1/")) {
       if (!isAuthorized(req, auth)) {
         sendOpenAIError(res, 401, "Missing or invalid bearer token", "invalid_request_error", null);
         return;
       }
 
-      compatHandler(req, res);
+      compatHandler.handle(req, res);
       return;
     }
 
@@ -115,6 +140,14 @@ async function handleProxyRequest(
       "not_found",
     );
   } catch (error) {
+    if (error instanceof CodexAuthBadRequestError) {
+      sendOpenAIError(res, 400, error.message, "invalid_request_error", null, "bad_request");
+      return;
+    }
+    if (error instanceof CodexAuthConflictError) {
+      sendOpenAIError(res, 409, error.message, "invalid_request_error", null, "conflict");
+      return;
+    }
     sendOpenAIError(
       res,
       500,
@@ -128,7 +161,7 @@ async function handleProxyRequest(
 
 async function handleReadyz(
   res: ServerResponse,
-  compatHandler: OpenAICompatHandler,
+  compatHandler: RestartableOpenAICompatHandler,
 ): Promise<void> {
   try {
     await compatHandler.ready();
@@ -148,6 +181,76 @@ async function handleReadyz(
   }
 }
 
+async function handleAuthRequest(
+  req: IncomingMessage,
+  res: ServerResponse,
+  url: URL,
+  authManager: CodexAuthManager,
+): Promise<void> {
+  if (req.method === "GET" && url.pathname === "/auth/status") {
+    sendJson(res, 200, await authManager.status());
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/auth/device") {
+    sendJson(res, 202, await authManager.startDeviceFlow());
+    return;
+  }
+
+  const deviceMatch = url.pathname.match(/^\/auth\/device\/([^/]+)(?:\/cancel)?$/);
+  if (deviceMatch) {
+    const flowId = decodeURIComponent(deviceMatch[1] ?? "");
+    if (req.method === "GET" && !url.pathname.endsWith("/cancel")) {
+      const flow = await authManager.getDeviceFlow(flowId);
+      if (!flow) {
+        sendOpenAIError(
+          res,
+          404,
+          "Codex device login flow not found",
+          "invalid_request_error",
+          null,
+          "not_found",
+        );
+        return;
+      }
+      sendJson(res, 200, flow);
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname.endsWith("/cancel")) {
+      const flow = await authManager.cancelDeviceFlow(flowId);
+      if (!flow) {
+        sendOpenAIError(
+          res,
+          404,
+          "Codex device login flow not found",
+          "invalid_request_error",
+          null,
+          "not_found",
+        );
+        return;
+      }
+      sendJson(res, 200, flow);
+      return;
+    }
+  }
+
+  if (req.method === "POST" && url.pathname === "/auth/import") {
+    const body = await readRequestBody(req);
+    sendJson(res, 200, await authManager.importAuthJson(body));
+    return;
+  }
+
+  sendOpenAIError(
+    res,
+    404,
+    `Unsupported auth endpoint: ${req.method ?? "GET"} ${url.pathname}`,
+    "invalid_request_error",
+    null,
+    "not_found",
+  );
+}
+
 function codexSubprocessEnv(config: CliConfig): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...process.env };
   for (const key of Object.keys(env)) {
@@ -164,6 +267,52 @@ function codexSubprocessEnv(config: CliConfig): NodeJS.ProcessEnv {
   }
 
   return env;
+}
+
+class RestartableOpenAICompatHandler {
+  readonly #config: CliConfig;
+  readonly #compat: OpenAICompatOptions | (() => OpenAICompatOptions) | undefined;
+  #handler: OpenAICompatHandler;
+
+  constructor(
+    config: CliConfig,
+    compat: OpenAICompatOptions | (() => OpenAICompatOptions) | undefined,
+  ) {
+    this.#config = config;
+    this.#compat = compat;
+    this.#handler = this.#createHandler();
+  }
+
+  handle(req: IncomingMessage, res: ServerResponse): void {
+    this.#handler(req, res);
+  }
+
+  async ready(): Promise<void> {
+    await this.#handler.ready();
+  }
+
+  async restart(): Promise<void> {
+    const previous = this.#handler;
+    this.#handler = this.#createHandler();
+    try {
+      await previous.close();
+    } catch {
+      // Credential updates should not fail because the old app-server was already gone.
+    }
+  }
+
+  async close(): Promise<void> {
+    await this.#handler.close();
+  }
+
+  #createHandler(): OpenAICompatHandler {
+    const compat = typeof this.#compat === "function" ? this.#compat() : this.#compat;
+    return createOpenAICompatHandler({
+      ...openAICompatOptionsFromConfig(this.#config),
+      ...compat,
+      bearerToken: undefined,
+    });
+  }
 }
 
 function isAuthorized(req: IncomingMessage, auth: AuthConfig): boolean {
@@ -211,7 +360,18 @@ function sendOpenAIError(
   });
 }
 
-function sendJson(res: ServerResponse, status: number, body: JsonRecord): void {
+function sendMarkdown(res: ServerResponse, status: number, body: string): void {
+  if (res.headersSent) {
+    res.end();
+    return;
+  }
+
+  res.statusCode = status;
+  res.setHeader("content-type", "text/markdown; charset=utf-8");
+  res.end(body);
+}
+
+function sendJson(res: ServerResponse, status: number, body: unknown): void {
   if (res.headersSent) {
     res.end();
     return;
@@ -220,4 +380,66 @@ function sendJson(res: ServerResponse, status: number, body: JsonRecord): void {
   res.statusCode = status;
   res.setHeader("content-type", "application/json");
   res.end(`${JSON.stringify(body)}\n`);
+}
+
+function readRequestBody(req: IncomingMessage): Promise<string> {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  let tooLarge = false;
+  const maxSize = 1024 * 1024;
+
+  return new Promise((resolve, reject) => {
+    req.on("data", (chunk: Buffer) => {
+      if (tooLarge) {
+        return;
+      }
+      size += chunk.byteLength;
+      if (size > maxSize) {
+        tooLarge = true;
+        reject(new CodexAuthBadRequestError("Request body is too large"));
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on("end", () => {
+      resolve(Buffer.concat(chunks).toString("utf8"));
+    });
+    req.on("error", reject);
+  });
+}
+
+function authGuideMarkdown(): string {
+  return [
+    "# Codex OpenAI Proxy Auth",
+    "",
+    "This proxy uses one service-wide Codex identity for all `/v1` requests. Client API keys authenticate callers to the proxy only; they are not forwarded to Codex.",
+    "",
+    "Changing Codex credentials restarts the underlying Codex app-server connection. Active `/v1` requests can fail during that restart.",
+    "",
+    "## Check Status",
+    "",
+    "```bash",
+    'curl -H "Authorization: Bearer $CODEX_OPENAI_PROXY_API_KEY" \\',
+    "  https://proxy.example.com/auth/status",
+    "```",
+    "",
+    "## Start Device Login",
+    "",
+    "```bash",
+    'curl -X POST -H "Authorization: Bearer $CODEX_OPENAI_PROXY_API_KEY" \\',
+    "  https://proxy.example.com/auth/device",
+    "```",
+    "",
+    "Open the returned `verification_uri`, enter the returned `user_code`, then poll `GET /auth/device/{flow_id}` until `status` is `completed`.",
+    "",
+    "## Import Local Codex Auth JSON",
+    "",
+    "```bash",
+    'curl -X POST -H "Authorization: Bearer $CODEX_OPENAI_PROXY_API_KEY" \\',
+    '  -H "Content-Type: application/json" \\',
+    "  --data-binary @${CODEX_HOME:-$HOME/.codex}/auth.json \\",
+    "  https://proxy.example.com/auth/import",
+    "```",
+    "",
+  ].join("\n");
 }

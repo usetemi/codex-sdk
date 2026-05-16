@@ -1,4 +1,14 @@
 export {
+  CodexAuthBadRequestError,
+  CodexAuthConflictError,
+  createCodexAuthManager,
+  type CodexAuthImportResult,
+  type CodexAuthManager,
+  type CodexAuthStatus,
+  type CodexDeviceFlowSnapshot,
+  type CodexDeviceFlowStatus,
+} from "./codex-auth.js";
+export {
   ConfigError,
   formatUsage,
   isHelpRequest,

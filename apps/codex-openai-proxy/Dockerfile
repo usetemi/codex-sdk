@@ -21,6 +21,7 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV CODEX_OPENAI_PROXY_HOST=0.0.0.0
 ENV CODEX_OPENAI_PROXY_PORT=8080
+ENV CODEX_OPENAI_PROXY_DATA_DIR=/data
 ENV PATH=/app/node_modules/.bin:$PATH
 
 COPY --from=build /repo/node_modules node_modules
