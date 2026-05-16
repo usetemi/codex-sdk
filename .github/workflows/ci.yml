@@ -31,7 +31,61 @@ jobs:
       - run: npm run proxy:static
       - run: npm run proxy:test
       - run: npm --workspace @usetemi/codex-openai-proxy run build
-      - run: docker build -f apps/codex-openai-proxy/Dockerfile .
+      - run: docker build -f apps/codex-openai-proxy/Dockerfile -t codex-openai-proxy:ci .
+      - name: Docker auth smoke
+        run: |
+          set -euo pipefail
+
+          docker run --rm codex-openai-proxy:ci test -s /etc/ssl/certs/ca-certificates.crt
+
+          temp_dir="$(mktemp -d)"
+          trap 'docker rm -f codex-openai-proxy-smoke >/dev/null 2>&1 || true; rm -rf "${temp_dir}"' EXIT
+
+          cat > "${temp_dir}/fake-codex" <<'SCRIPT'
+          #!/bin/sh
+          if [ "$1" = "login" ] && [ "$2" = "status" ]; then
+            echo "Not logged in" >&2
+            exit 1
+          fi
+
+          if [ "$1" = "login" ] && [ "$2" = "--device-auth" ]; then
+            echo "Open https://auth.openai.com/codex/device"
+            echo "Enter ABCD-EFGH"
+            echo "expires in 15 minutes"
+            exit 0
+          fi
+
+          echo "unexpected fake codex args: $*" >&2
+          exit 2
+          SCRIPT
+          chmod +x "${temp_dir}/fake-codex"
+
+          docker run -d --name codex-openai-proxy-smoke \
+            -p 127.0.0.1:18080:8080 \
+            -e CODEX_OPENAI_PROXY_API_KEYS=proxy-token \
+            -e CODEX_OPENAI_PROXY_CODEX_COMMAND=/fake-bin/fake-codex \
+            -v "${temp_dir}:/fake-bin:ro" \
+            codex-openai-proxy:ci
+
+          for _ in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:18080/healthz >/tmp/proxy-healthz.json; then
+              break
+            fi
+            sleep 1
+          done
+          test -s /tmp/proxy-healthz.json
+
+          curl -fsS \
+            -H "Authorization: Bearer proxy-token" \
+            http://127.0.0.1:18080/auth/status \
+            >/tmp/proxy-auth-status.json
+          node -e "const fs=require('node:fs'); const body=JSON.parse(fs.readFileSync('/tmp/proxy-auth-status.json','utf8')); if (body.authenticated !== false || body.credential_source !== 'managed_codex_home') process.exit(1);"
+
+          curl -fsS -X POST \
+            -H "Authorization: Bearer proxy-token" \
+            http://127.0.0.1:18080/auth/device \
+            >/tmp/proxy-auth-device.json
+          node -e "const fs=require('node:fs'); const body=JSON.parse(fs.readFileSync('/tmp/proxy-auth-device.json','utf8')); if (body.status !== 'pending' || body.user_code !== 'ABCD-EFGH') process.exit(1);"
 
   openai-compat:
     runs-on: ubuntu-24.04

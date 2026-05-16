@@ -2,12 +2,12 @@
 
 OpenAI-compatible HTTP proxy for Codex app-server. Run the proxy, point standard OpenAI clients at `/v1`, and the proxy translates supported requests to Codex turns.
 
-Version `0.130.0-4` targets Codex `0.130.0`.
+Version `0.130.0-5` targets Codex `0.130.0`.
 
 ## Run
 
 ```bash
-npx @usetemi/codex-openai-proxy --api-key local-proxy-token
+npx @usetemi/codex-openai-proxy@0.130.0-5 --api-key local-proxy-token
 ```
 
 Use the proxy with normal OpenAI clients:
@@ -38,11 +38,17 @@ The proxy starts `codex app-server --listen stdio://`. Codex itself can authenti
 - Login mode: run `codex login` as the service user before starting the proxy, then pass `CODEX_HOME`.
 - API-key mode: set `CODEX_API_KEY`; the proxy passes it through to the Codex subprocess.
 
-Client API keys protect both `/v1/*` and `/auth/*` when proxy auth is enabled. `GET /auth.md` is public guidance for humans and coding agents.
+Client API keys protect both `/v1/*` and `/auth/*` when proxy auth is enabled. `GET /auth` is a public browser operator UI, and `GET /auth.md` is public guidance for humans and coding agents.
 
 Changing Codex credentials restarts the underlying Codex app-server connection. Active `/v1` requests can fail during that restart.
 
 Web re-auth flow:
+
+```text
+http://127.0.0.1:8080/auth
+```
+
+API flow:
 
 ```bash
 curl -H "Authorization: Bearer proxy-token" http://127.0.0.1:8080/auth/status
@@ -53,6 +59,14 @@ curl -X POST \
 ```
 
 Open the returned `verification_uri`, enter the returned `user_code`, then poll `GET /auth/device/{flow_id}` until `status` is `completed`.
+
+Restart Codex without changing credentials:
+
+```bash
+curl -X POST \
+  -H "Authorization: Bearer proxy-token" \
+  http://127.0.0.1:8080/auth/restart
+```
 
 To import local Codex login state instead:
 
@@ -96,10 +110,10 @@ Managed web re-auth with persisted proxy data:
 docker run --rm -p 8080:8080 \
   -e CODEX_OPENAI_PROXY_API_KEYS=proxy-token \
   -v codex-openai-proxy-data:/data \
-  ghcr.io/usetemi/codex-openai-proxy:0.130.0-4
+  ghcr.io/usetemi/codex-openai-proxy:0.130.0-5
 ```
 
-Then visit `http://127.0.0.1:8080/auth.md` or call `/auth/device` from your web app.
+Then visit `http://127.0.0.1:8080/auth` or call `/auth/device` from your web app.
 
 Existing persisted login state:
 
@@ -108,7 +122,7 @@ docker run --rm -p 8080:8080 \
   -e CODEX_OPENAI_PROXY_API_KEYS=proxy-token \
   -e CODEX_HOME=/codex-home \
   -v codex-home:/codex-home \
-  ghcr.io/usetemi/codex-openai-proxy:0.130.0-4
+  ghcr.io/usetemi/codex-openai-proxy:0.130.0-5
 ```
 
 API-key mode:
@@ -117,15 +131,17 @@ API-key mode:
 docker run --rm -p 8080:8080 \
   -e CODEX_OPENAI_PROXY_API_KEYS=proxy-token \
   -e CODEX_API_KEY="$CODEX_API_KEY" \
-  ghcr.io/usetemi/codex-openai-proxy:0.130.0-4
+  ghcr.io/usetemi/codex-openai-proxy:0.130.0-5
 ```
 
 ## Endpoints
 
 - `GET /healthz`
 - `GET /readyz`
+- `GET /auth`
 - `GET /auth.md`
 - `GET /auth/status`
+- `POST /auth/restart`
 - `POST /auth/device`
 - `GET /auth/device/{flow_id}`
 - `POST /auth/device/{flow_id}/cancel`

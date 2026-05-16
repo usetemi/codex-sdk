@@ -9,12 +9,19 @@ export type CodexAuthStatus = {
   authenticated: boolean;
   auth_type?: string;
   message: string;
+  codex_home?: string | null;
+  data_dir?: string;
+  credential_source?: CodexCredentialSource;
+  last_restart_at?: string | null;
+  restart_count?: number;
 };
 
 export type CodexAuthImportResult = {
   status: "imported";
   restarted_codex: boolean;
 };
+
+export type CodexCredentialSource = "api_key" | "codex_home" | "managed_codex_home";
 
 export type CodexDeviceFlowStatus = "starting" | "pending" | "completed" | "failed" | "cancelled";
 

@@ -4,7 +4,7 @@ defmodule CodexSdk.MixProject do
   def project do
     [
       app: :usetemi_codex_sdk,
-      version: "0.130.0-4",
+      version: "0.130.0-5",
       elixir: "~> 1.19",
       aliases: aliases(),
       description: description(),

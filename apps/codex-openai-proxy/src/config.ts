@@ -22,6 +22,7 @@ export type CliConfig = {
   codexCommand: string;
   dataDir: string;
   codexHome?: string;
+  codexHomeSource: "explicit" | "managed";
   codexApiKey?: string;
   cwd?: string;
   model?: string;
@@ -95,8 +96,8 @@ export function parseCliConfig(
   );
   const dataDir =
     flagValue(flags, "data-dir") ?? envValue(env.CODEX_OPENAI_PROXY_DATA_DIR) ?? defaultDataDir();
-  const codexHome =
-    flagValue(flags, "codex-home") ?? envValue(env.CODEX_HOME) ?? path.join(dataDir, "codex-home");
+  const explicitCodexHome = flagValue(flags, "codex-home") ?? envValue(env.CODEX_HOME);
+  const codexHome = explicitCodexHome ?? path.join(dataDir, "codex-home");
 
   return {
     host,
@@ -108,6 +109,7 @@ export function parseCliConfig(
       "codex",
     dataDir,
     codexHome,
+    codexHomeSource: explicitCodexHome ? "explicit" : "managed",
     codexApiKey: flagValue(flags, "codex-api-key") ?? envValue(env.CODEX_API_KEY),
     cwd: flagValue(flags, "cwd") ?? envValue(env.CODEX_OPENAI_PROXY_CWD),
     model: flagValue(flags, "model") ?? envValue(env.CODEX_OPENAI_PROXY_MODEL),

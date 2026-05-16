@@ -168,6 +168,25 @@ test("GET /auth.md is public markdown guidance", async (t) => {
   assert.match(await response.text(), /auth\/device/);
 });
 
+test("GET /auth is public operator UI", async (t) => {
+  const fake = new FakeAppServer();
+  const config = parseCliConfig(["--api-key", "good-token"], {});
+  const baseUrl = await startProxyFixture(t, fake, config);
+
+  const response = await fetch(`${baseUrl}/auth`);
+  assert.equal(response.status, 200);
+  assert.match(response.headers.get("content-type") ?? "", /text\/html/);
+  const body = await response.text();
+  assert.match(body, /sessionStorage/);
+  assert.match(body, /auth\/restart/);
+
+  const apiResponse = await fetch(`${baseUrl}/auth/status`);
+  assert.equal(apiResponse.status, 401);
+
+  const restartResponse = await fetch(`${baseUrl}/auth/restart`, { method: "POST" });
+  assert.equal(restartResponse.status, 401);
+});
+
 test("auth management endpoints use proxy bearer auth", async (t) => {
   const fake = new FakeAppServer();
   const authManager = new FakeAuthManager();
@@ -186,10 +205,54 @@ test("auth management endpoints use proxy bearer auth", async (t) => {
     headers: { authorization: "Bearer good-token" },
   });
   assert.equal(valid.status, 200);
-  assert.deepEqual(await valid.json(), {
-    authenticated: false,
-    message: "Not logged in",
-  });
+  const status = assertRecord(await valid.json());
+  assert.equal(status.authenticated, false);
+  assert.equal(status.message, "Not logged in");
+  assert.equal(status.credential_source, "managed_codex_home");
+  assert.equal(status.restart_count, 0);
+  assert.equal(status.last_restart_at, null);
+  assert.match(String(status.codex_home), /codex-openai-proxy\/codex-home$/);
+});
+
+test("auth status reports credential source metadata", async (t) => {
+  const fake = new FakeAppServer();
+  const authManager = new FakeAuthManager();
+  const managedConfig = parseCliConfig(
+    ["--api-key", "good-token", "--data-dir", "/tmp/proxy-data"],
+    {},
+  );
+  const managedBaseUrl = await startProxyFixture(t, fake, managedConfig, { authManager });
+  const headers = { authorization: "Bearer good-token" };
+
+  const managed = assertRecord(
+    await (await fetch(`${managedBaseUrl}/auth/status`, { headers })).json(),
+  );
+  assert.equal(managed.data_dir, "/tmp/proxy-data");
+  assert.equal(managed.codex_home, "/tmp/proxy-data/codex-home");
+  assert.equal(managed.credential_source, "managed_codex_home");
+
+  const explicitBaseUrl = await startProxyFixture(
+    t,
+    new FakeAppServer(),
+    parseCliConfig(["--api-key", "good-token"], { CODEX_HOME: "/tmp/codex-home" }),
+    { authManager: new FakeAuthManager() },
+  );
+  const explicit = assertRecord(
+    await (await fetch(`${explicitBaseUrl}/auth/status`, { headers })).json(),
+  );
+  assert.equal(explicit.codex_home, "/tmp/codex-home");
+  assert.equal(explicit.credential_source, "codex_home");
+
+  const apiKeyBaseUrl = await startProxyFixture(
+    t,
+    new FakeAppServer(),
+    parseCliConfig(["--api-key", "good-token"], { CODEX_API_KEY: "codex-key" }),
+    { authManager: new FakeAuthManager() },
+  );
+  const apiKey = assertRecord(
+    await (await fetch(`${apiKeyBaseUrl}/auth/status`, { headers })).json(),
+  );
+  assert.equal(apiKey.credential_source, "api_key");
 });
 
 test("device auth flow starts, polls, cancels, and rejects concurrent starts", async (t) => {
@@ -272,6 +335,42 @@ test("auth import writes managed auth JSON and restarts Codex app-server", async
     OPENAI_API_KEY: "secret",
     refresh_token: "refresh",
   });
+
+  const after = await fetch(`${baseUrl}/v1/models`, { headers });
+  assert.equal(after.status, 200);
+  assert.equal(second.requests[0]?.method, "initialize");
+});
+
+test("auth restart restarts Codex app-server without changing credentials", async (t) => {
+  const first = new CloseCountingFakeAppServer();
+  const second = new CloseCountingFakeAppServer();
+  const fakes = [first, second];
+  let fakeIndex = 0;
+  const config = parseCliConfig(["--api-key", "good-token"], {});
+  const baseUrl = await startProxyFixture(t, first, config, {
+    authManager: new FakeAuthManager(),
+    compat: () => ({ client: fakes[fakeIndex++] ?? new CloseCountingFakeAppServer() }),
+  });
+  const headers = { authorization: "Bearer good-token" };
+
+  const before = await fetch(`${baseUrl}/v1/models`, { headers });
+  assert.equal(before.status, 200);
+  assert.equal(first.requests[0]?.method, "initialize");
+
+  const restarted = await fetch(`${baseUrl}/auth/restart`, {
+    method: "POST",
+    headers,
+  });
+  assert.equal(restarted.status, 200);
+  const restartedJson = assertRecord(await restarted.json());
+  assert.equal(restartedJson.status, "restarted");
+  assert.equal(typeof restartedJson.restarted_at, "string");
+  assert.equal(restartedJson.restart_count, 1);
+  assert.equal(first.closeCount, 1);
+
+  const status = assertRecord(await (await fetch(`${baseUrl}/auth/status`, { headers })).json());
+  assert.equal(status.last_restart_at, restartedJson.restarted_at);
+  assert.equal(status.restart_count, 1);
 
   const after = await fetch(`${baseUrl}/v1/models`, { headers });
   assert.equal(after.status, 200);

@@ -5,6 +5,7 @@ export {
   type CodexAuthImportResult,
   type CodexAuthManager,
   type CodexAuthStatus,
+  type CodexCredentialSource,
   type CodexDeviceFlowSnapshot,
   type CodexDeviceFlowStatus,
 } from "./codex-auth.js";
@@ -23,5 +24,6 @@ export {
   createCodexOpenAIProxyServer,
   openAICompatOptionsFromConfig,
   type CodexOpenAIProxyHandler,
+  type CodexOpenAIProxyRestartResult,
   type ProxyServerOptions,
 } from "./server.js";

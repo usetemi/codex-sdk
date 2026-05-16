@@ -31,19 +31,19 @@ Shared fixtures:
 TypeScript SDK:
 
 ```bash
-npm install @usetemi/codex-sdk@0.130.0-4
+npm install @usetemi/codex-sdk@0.130.0-5
 ```
 
 Codex OpenAI proxy from npm:
 
 ```bash
-npx @usetemi/codex-openai-proxy@0.130.0-4 --api-key local-proxy-token
+npx @usetemi/codex-openai-proxy@0.130.0-5 --api-key local-proxy-token
 ```
 
 Python SDK:
 
 ```bash
-pip install usetemi-codex-sdk
+pip install usetemi-codex-sdk==0.130.0.post5
 ```
 
 Elixir SDK:
@@ -51,7 +51,7 @@ Elixir SDK:
 ```elixir
 def deps do
   [
-    {:usetemi_codex_sdk, "0.130.0-4"}
+    {:usetemi_codex_sdk, "0.130.0-5"}
   ]
 end
 ```
@@ -63,7 +63,7 @@ mix deps.get
 Go SDK:
 
 ```bash
-go get github.com/usetemi/codex-sdk/packages/go@v0.130.0-4
+go get github.com/usetemi/codex-sdk/packages/go@v0.130.0-5
 ```
 
 ## Codex OpenAI Proxy
@@ -76,10 +76,10 @@ The GHCR image is public and can be pulled without `docker login`. Run it with m
 docker run --rm -p 8080:8080 \
   -e CODEX_OPENAI_PROXY_API_KEYS=local-proxy-token \
   -v codex-openai-proxy-data:/data \
-  ghcr.io/usetemi/codex-openai-proxy:0.130.0-4
+  ghcr.io/usetemi/codex-openai-proxy:0.130.0-5
 ```
 
-Open `http://127.0.0.1:8080/auth.md` for browser and API instructions, or start the device-login flow directly:
+Open `http://127.0.0.1:8080/auth` for the bundled operator UI, or start the device-login flow directly:
 
 ```bash
 curl -X POST \
@@ -95,7 +95,7 @@ You can still run with Codex API-key auth:
 docker run --rm -p 8080:8080 \
   -e CODEX_OPENAI_PROXY_API_KEYS=local-proxy-token \
   -e CODEX_API_KEY="$CODEX_API_KEY" \
-  ghcr.io/usetemi/codex-openai-proxy:0.130.0-4
+  ghcr.io/usetemi/codex-openai-proxy:0.130.0-5
 ```
 
 Or mount existing `codex login` state:
@@ -105,7 +105,7 @@ docker run --rm -p 8080:8080 \
   -e CODEX_OPENAI_PROXY_API_KEYS=local-proxy-token \
   -e CODEX_HOME=/codex-home \
   -v codex-home:/codex-home \
-  ghcr.io/usetemi/codex-openai-proxy:0.130.0-4
+  ghcr.io/usetemi/codex-openai-proxy:0.130.0-5
 ```
 
 Point OpenAI clients at `http://127.0.0.1:8080/v1` and use `local-proxy-token` as the client API key. That token authenticates callers to the proxy only; Codex auth comes from managed proxy storage, `CODEX_API_KEY`, or an explicit `CODEX_HOME`.

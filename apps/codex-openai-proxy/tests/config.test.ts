@@ -53,6 +53,7 @@ test("flags override env and app-specific port overrides PORT", () => {
   assert.deepEqual(config.auth, { mode: "static", apiKeys: ["flag-token"] });
   assert.equal(config.codexCommand, "codex-dev");
   assert.equal(config.codexHome, "/tmp/codex-home-flag");
+  assert.equal(config.codexHomeSource, "explicit");
   assert.equal(config.codexApiKey, "codex-api-flag");
   assert.equal(config.dataDir, "/tmp/proxy-data-flag");
   assert.equal(config.cwd, "/tmp/project");
@@ -113,6 +114,7 @@ test("loopback default permits local unauthenticated use", () => {
   assert.deepEqual(config.auth, { mode: "disabled" });
   assert.match(config.dataDir, /codex-openai-proxy$/);
   assert.match(config.codexHome ?? "", /codex-openai-proxy\/codex-home$/);
+  assert.equal(config.codexHomeSource, "managed");
 });
 
 test("managed codex home comes from data dir when CODEX_HOME is unset", () => {
@@ -122,4 +124,5 @@ test("managed codex home comes from data dir when CODEX_HOME is unset", () => {
 
   assert.equal(config.dataDir, "/tmp/proxy-data");
   assert.equal(config.codexHome, "/tmp/proxy-data/codex-home");
+  assert.equal(config.codexHomeSource, "managed");
 });
