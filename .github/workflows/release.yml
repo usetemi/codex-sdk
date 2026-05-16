@@ -9,6 +9,14 @@ on:
       version:
         description: Release version, with or without leading v
         required: true
+      publish_target:
+        description: Package set to publish
+        required: false
+        default: all
+        type: choice
+        options:
+          - all
+          - npm
 
 permissions:
   contents: read
@@ -62,6 +70,7 @@ jobs:
       - run: npm run check
 
   build-npm:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.publish_target == 'all' || inputs.publish_target == 'npm' }}
     needs:
       - validate
       - checks
@@ -83,6 +92,7 @@ jobs:
           if-no-files-found: error
 
   publish-npm:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.publish_target == 'all' || inputs.publish_target == 'npm' }}
     needs:
       - validate
       - build-npm
@@ -93,6 +103,7 @@ jobs:
       id-token: write
     env:
       NPM_ACCESS: ${{ vars.NPM_ACCESS || 'public' }}
+      NPM_TAG: ${{ vars.NPM_TAG || 'next' }}
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -102,9 +113,16 @@ jobs:
         with:
           node-version: "24"
           registry-url: https://registry.npmjs.org
-      - run: npm publish dist/npm/*.tgz --access "${NPM_ACCESS}"
+      - name: Publish npm package
+        run: |
+          args=(publish dist/npm/*.tgz --access "${NPM_ACCESS}")
+          if [[ "${{ needs.validate.outputs.version }}" == *-* ]]; then
+            args+=(--tag "${NPM_TAG}")
+          fi
+          npm "${args[@]}"
 
   build-python:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.publish_target == 'all' }}
     needs:
       - validate
       - checks
@@ -123,6 +141,7 @@ jobs:
           if-no-files-found: error
 
   publish-pypi:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.publish_target == 'all' }}
     needs:
       - validate
       - build-python
@@ -141,6 +160,7 @@ jobs:
           packages-dir: dist/python
 
   publish-hex:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.publish_target == 'all' }}
     needs:
       - validate
       - checks
@@ -167,6 +187,7 @@ jobs:
           mix "${args[@]}"
 
   publish-go:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.publish_target == 'all' }}
     needs:
       - validate
       - checks
