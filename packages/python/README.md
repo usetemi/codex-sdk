@@ -8,7 +8,7 @@ Temi convenience wrapper around the upstream `openai-codex` Python SDK when it i
 pip install usetemi-codex-sdk
 ```
 
-Package versions track the stable Codex version they target. Version `0.130.0-1` targets Codex `0.130.0`.
+Package versions track the stable Codex version they target. Version `0.130.0-2` targets Codex `0.130.0`.
 
 ## Usage
 

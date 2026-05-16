@@ -20,11 +20,11 @@ This repository wraps the upstream TypeScript and Python SDKs where they exist, 
 ## Install
 
 ```bash
-npm install @usetemi/codex-sdk@0.130.0-1
+npm install @usetemi/codex-sdk@0.130.0-2
 pip install usetemi-codex-sdk
-# Elixir: add {:usetemi_codex_sdk, "0.130.0-1"} to mix.exs, then:
+# Elixir: add {:usetemi_codex_sdk, "0.130.0-2"} to mix.exs, then:
 mix deps.get
-go get github.com/usetemi/codex-sdk/packages/go@v0.130.0-1
+go get github.com/usetemi/codex-sdk/packages/go@v0.130.0-2
 ```
 
 For Elixir, add the package to `mix.exs`:
@@ -32,7 +32,7 @@ For Elixir, add the package to `mix.exs`:
 ```elixir
 def deps do
   [
-    {:usetemi_codex_sdk, "0.130.0-1"}
+    {:usetemi_codex_sdk, "0.130.0-2"}
   ]
 end
 ```
