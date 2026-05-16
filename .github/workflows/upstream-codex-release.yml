@@ -1,0 +1,136 @@
+name: Upstream Codex Release
+
+on:
+  schedule:
+    - cron: "27 10 * * *"
+  workflow_dispatch:
+    inputs:
+      version_override:
+        description: Optional stable Codex version to evaluate instead of npm latest
+        required: false
+      dry_run:
+        description: Run discovery, bump, and validation without creating a PR
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: upstream-codex-release
+  cancel-in-progress: false
+
+jobs:
+  upstream-codex-release:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: astral-sh/setup-uv@v6
+
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: "28"
+          elixir-version: "1.19"
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: packages/go/go.mod
+
+      - id: discover
+        name: Discover upstream Codex version
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION_OVERRIDE: ${{ github.event.inputs.version_override || '' }}
+          DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+        run: |
+          args=(--root .)
+          if [ -n "${VERSION_OVERRIDE}" ]; then
+            args+=(--version-override "${VERSION_OVERRIDE}")
+          fi
+          if [ "${DRY_RUN}" = "true" ]; then
+            args+=(--dry-run)
+          fi
+          python3 scripts/upstream_codex_release.py "${args[@]}"
+
+      - name: Report skipped update
+        if: ${{ steps.discover.outputs.should_update != 'true' }}
+        run: echo "${{ steps.discover.outputs.skip_reason }}"
+
+      - name: Bump package versions
+        if: ${{ steps.discover.outputs.should_update == 'true' }}
+        run: python3 scripts/bump_codex_version.py "${{ steps.discover.outputs.version }}"
+
+      - name: Install dependencies
+        if: ${{ steps.discover.outputs.should_update == 'true' }}
+        run: npm install
+
+      - name: Install Elixir dependencies
+        if: ${{ steps.discover.outputs.should_update == 'true' }}
+        working-directory: packages/elixir
+        run: mix deps.get
+
+      - name: Smoke test Codex schema generation
+        if: ${{ steps.discover.outputs.should_update == 'true' }}
+        run: |
+          set -euo pipefail
+          npm install -g "@openai/codex@${{ steps.discover.outputs.version }}"
+          codex --version | tee /tmp/codex-version.txt
+          codex app-server generate-json-schema --out /tmp/codex-schema
+          codex app-server generate-ts --out /tmp/codex-ts --experimental
+
+      - name: Run repository checks
+        if: ${{ steps.discover.outputs.should_update == 'true' }}
+        run: npm run check
+
+      - name: Build PR body
+        if: ${{ steps.discover.outputs.should_update == 'true' }}
+        run: |
+          cat >/tmp/codex-pr-body.md <<EOF
+          Automated update for stable upstream Codex ${{ steps.discover.outputs.version }}.
+
+          Upstream npm versions:
+          - \`@openai/codex\`: \`${{ steps.discover.outputs.codex_version }}\`
+          - \`@openai/codex-sdk\`: \`${{ steps.discover.outputs.codex_sdk_version }}\`
+
+          Validation:
+          - \`codex --version\`: \`$(cat /tmp/codex-version.txt)\`
+          - \`codex app-server generate-json-schema\`: passed
+          - \`codex app-server generate-ts --experimental\`: passed
+          - \`npm run check\`: passed
+
+          Release behavior:
+          - After this PR is merged to \`main\`, the auto-release workflow creates GitHub release \`v${{ steps.discover.outputs.version }}\`.
+          - The auto-release workflow dispatches the existing release workflow to publish npm, PyPI, Hex, and Go artifacts.
+          - PyPI publishing is included even if trusted publishing still needs repository-side configuration.
+          EOF
+
+      - name: Create update pull request
+        if: ${{ steps.discover.outputs.should_update == 'true' && github.event.inputs.dry_run != 'true' }}
+        uses: peter-evans/create-pull-request@v7
+        with:
+          branch: ${{ steps.discover.outputs.branch }}
+          base: main
+          title: ${{ steps.discover.outputs.pr_title }}
+          commit-message: ${{ steps.discover.outputs.pr_title }}
+          body-path: /tmp/codex-pr-body.md
+          labels: automated-codex-release
+          delete-branch: true
+
+      - name: Dry-run complete
+        if: ${{ steps.discover.outputs.should_update == 'true' && github.event.inputs.dry_run == 'true' }}
+        run: echo "Dry run completed for ${{ steps.discover.outputs.version }} without creating a PR."

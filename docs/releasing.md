@@ -6,7 +6,7 @@ Use three numeric segments for normal releases. `0.130.0.1` is not portable beca
 
 ## Registry Configuration
 
-GitHub environments `npm`, `pypi`, `hex`, and `go` gate publishing. Keep required reviewers on these environments.
+GitHub environments `npm`, `pypi`, `hex`, and `go` gate publishing. Keep the environments because npm/PyPI trusted publishing and Hex secrets depend on them. For fully automatic Codex update releases, do not configure required reviewers on these environments; required reviewers will leave publish jobs waiting for manual approval.
 
 npm publishes through trusted publishing for package `@usetemi/codex-sdk`:
 
@@ -36,10 +36,15 @@ Go modules are published by tags, not a package index. Because the Go module is 
 
 ## Release Flow
 
+The scheduled `Upstream Codex Release` workflow polls npm for stable `@openai/codex` releases. When a new stable version is available and the matching `@openai/codex-sdk` version is published, it bumps all package manifests, regenerates lock files, runs Codex schema smoke tests, runs `npm run check`, and opens a PR labeled `automated-codex-release`.
+
+After that PR is merged to `main`, `Auto Release After Codex PR` validates that the merged package versions match the PR title, creates a GitHub release tagged `v<version>`, such as `v0.130.0`, and dispatches the existing release workflow. The release workflow then validates the tag, builds package artifacts, publishes to npm, PyPI, and Hex, and creates the Go module tag.
+
+Manual release flow:
+
 1. Update all package versions to the target Codex version.
 2. Run `npm run check`.
 3. Create and publish a GitHub release tagged `v<version>`, such as `v0.130.0`.
-4. Approve the protected publishing environments when the release workflow requests deployment.
-5. The release workflow validates that all package versions match the release tag, builds package artifacts, publishes to npm, PyPI, and Hex, and creates the Go module tag.
+4. The release workflow validates that all package versions match the release tag, builds package artifacts, publishes to npm, PyPI, and Hex, and creates the Go module tag.
 
 The workflow can also be run manually with a `version` input. Manual runs still validate that package manifests match the requested version.

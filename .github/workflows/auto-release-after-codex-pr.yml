@@ -1,0 +1,77 @@
+name: Auto Release After Codex PR
+
+on:
+  pull_request:
+    types:
+      - closed
+
+permissions:
+  actions: write
+  contents: write
+
+concurrency:
+  group: auto-release-codex-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: >-
+      ${{
+        github.event.pull_request.merged == true &&
+        github.event.pull_request.base.ref == 'main' &&
+        contains(github.event.pull_request.labels.*.name, 'automated-codex-release')
+      }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+          fetch-depth: 0
+
+      - id: version
+        name: Validate merged package versions
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          set -euo pipefail
+          title="${PR_TITLE}"
+          if [[ ! "${title}" =~ ^Update\ Codex\ SDK\ target\ to\ ([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+            echo "Unexpected automated PR title: ${title}" >&2
+            exit 1
+          fi
+
+          version="${BASH_REMATCH[1]}"
+          python3 scripts/release_versions.py --expect "${version}"
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+
+      - id: release
+        name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          version="${{ steps.version.outputs.version }}"
+          tag="v${version}"
+          target_sha="$(git rev-parse HEAD)"
+
+          if gh release view "${tag}" >/dev/null 2>&1; then
+            echo "Release ${tag} already exists."
+            echo "created=false" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
+          gh release create "${tag}" \
+            --target "${target_sha}" \
+            --title "${tag}" \
+            --notes "Automated Codex SDK release for upstream Codex ${version}, created after merge of PR #${{ github.event.pull_request.number }}. The Release workflow publishes npm, PyPI, Hex, and Go artifacts."
+          echo "created=true" >> "${GITHUB_OUTPUT}"
+
+      - name: Dispatch package publishing
+        if: ${{ steps.release.outputs.created == 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh workflow run release.yml \
+            --ref "v${{ steps.version.outputs.version }}" \
+            --field version="${{ steps.version.outputs.version }}" \
+            --field publish_target=all
