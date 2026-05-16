@@ -122,6 +122,14 @@ jobs:
       - name: Publish npm package
         run: |
           for package in dist/npm/usetemi-codex-sdk-*.tgz dist/npm/usetemi-codex-openai-proxy-*.tgz; do
+            metadata=$(tar -xOf "${package}" package/package.json)
+            name=$(node -e 'const fs = require("node:fs"); console.log(JSON.parse(fs.readFileSync(0, "utf8")).name);' <<<"${metadata}")
+            version=$(node -e 'const fs = require("node:fs"); console.log(JSON.parse(fs.readFileSync(0, "utf8")).version);' <<<"${metadata}")
+            if npm view "${name}@${version}" version >/dev/null 2>&1; then
+              echo "${name}@${version} is already published; skipping"
+              continue
+            fi
+
             args=(publish "${package}" --access "${NPM_ACCESS}")
             if [[ "${{ needs.validate.outputs.version }}" == *-* ]]; then
               args+=(--tag "${NPM_TAG}")
