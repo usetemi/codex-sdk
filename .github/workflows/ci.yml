@@ -19,6 +19,20 @@ jobs:
       - run: npm run typescript:static
       - run: npm --workspace @usetemi/codex-sdk test
 
+  codex-openai-proxy:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+      - run: npm install
+      - run: npm run proxy:static
+      - run: npm run proxy:test
+      - run: npm --workspace @usetemi/codex-openai-proxy run build
+      - run: docker build -f apps/codex-openai-proxy/Dockerfile .
+
   openai-compat:
     runs-on: ubuntu-24.04
     continue-on-error: ${{ matrix.allow_failure }}

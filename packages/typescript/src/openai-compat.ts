@@ -97,6 +97,7 @@ export type OpenAICompatOptions = {
 
 export type OpenAICompatHandler = {
   (req: IncomingMessage, res: ServerResponse): void;
+  ready(): Promise<void>;
   close(): Promise<void>;
 };
 
@@ -281,6 +282,10 @@ export function createOpenAICompatHandler(options: OpenAICompatOptions = {}): Op
   const handler = ((req: IncomingMessage, res: ServerResponse) => {
     void handleRequest(req, res, options, connection);
   }) as OpenAICompatHandler;
+
+  handler.ready = async () => {
+    await connection.ensureInitialized();
+  };
 
   handler.close = async () => {
     await connection.close();

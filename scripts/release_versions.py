@@ -39,6 +39,7 @@ def main() -> int:
 def read_versions(root: Path) -> dict[str, str]:
     return {
         "typescript": read_typescript_version(root),
+        "proxy": read_proxy_version(root),
         "python": read_python_version(root),
         "elixir": read_elixir_version(root),
         "go": read_go_version(root),
@@ -62,6 +63,11 @@ def validate_expected_version(expected: str, versions: dict[str, str]) -> None:
 
 def read_typescript_version(root: Path) -> str:
     package_json = root / "packages" / "typescript" / "package.json"
+    return json.loads(package_json.read_text())["version"]
+
+
+def read_proxy_version(root: Path) -> str:
+    package_json = root / "apps" / "codex-openai-proxy" / "package.json"
     return json.loads(package_json.read_text())["version"]
 
 

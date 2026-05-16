@@ -26,6 +26,7 @@ TARGET_CODEX_SENTENCE = re.compile(r"Version `[^`]+` targets Codex `\d+\.\d+\.\d
 
 README_FILES = [
     Path("README.md"),
+    Path("apps/codex-openai-proxy/README.md"),
     Path("packages/typescript/README.md"),
     Path("packages/python/README.md"),
     Path("packages/elixir/README.md"),
@@ -62,6 +63,7 @@ def bump(root: Path, version: str, *, update_locks: bool = True) -> None:
     current_package_version = current_versions["typescript"]
 
     update_typescript_package(root, version)
+    update_proxy_package(root, version)
     update_python_project(root, version)
     update_elixir_mix(root, version)
     update_go_version(root, version)
@@ -79,6 +81,15 @@ def update_typescript_package(root: Path, version: str) -> None:
     package["version"] = version
     package["dependencies"]["@openai/codex"] = version
     package["dependencies"]["@openai/codex-sdk"] = f"^{version}"
+    package_json.write_text(json.dumps(package, indent=2) + "\n")
+
+
+def update_proxy_package(root: Path, version: str) -> None:
+    package_json = root / "apps" / "codex-openai-proxy" / "package.json"
+    package = json.loads(package_json.read_text())
+    package["version"] = version
+    package["dependencies"]["@openai/codex"] = version
+    package["dependencies"]["@usetemi/codex-sdk"] = version
     package_json.write_text(json.dumps(package, indent=2) + "\n")
 
 

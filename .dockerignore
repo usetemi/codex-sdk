@@ -1,0 +1,8 @@
+.git
+.ruff_cache
+node_modules
+dist
+packages/*/dist
+apps/*/dist
+coverage
+*.tgz

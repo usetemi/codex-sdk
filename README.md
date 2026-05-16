@@ -12,6 +12,7 @@ This repository wraps the upstream TypeScript and Python SDKs where they exist, 
 ## Packages
 
 - `packages/typescript` - npm package `@usetemi/codex-sdk`
+- `apps/codex-openai-proxy` - npm package `@usetemi/codex-openai-proxy` and image `ghcr.io/usetemi/codex-openai-proxy`
 - `packages/python` - PyPI package `usetemi-codex-sdk`
 - `packages/elixir` - Hex package `:usetemi_codex_sdk`
 - `packages/go` - Go module `github.com/usetemi/codex-sdk/packages/go`
@@ -21,6 +22,7 @@ This repository wraps the upstream TypeScript and Python SDKs where they exist, 
 
 ```bash
 npm install @usetemi/codex-sdk@0.130.0-2
+npx @usetemi/codex-openai-proxy@0.130.0-2 --api-key local-proxy-token
 pip install usetemi-codex-sdk
 # Elixir: add {:usetemi_codex_sdk, "0.130.0-2"} to mix.exs, then:
 mix deps.get

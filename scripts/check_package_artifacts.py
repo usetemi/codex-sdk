@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 import subprocess
 import sys
@@ -10,7 +11,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
-REQUIRED_NPM_FILES = {
+REQUIRED_SDK_NPM_FILES = {
     "package.json",
     "README.md",
     "LICENSE",
@@ -21,14 +22,37 @@ REQUIRED_NPM_FILES = {
     "dist/transport.js",
     "dist/transport.d.ts",
 }
+REQUIRED_PROXY_NPM_FILES = {
+    "package.json",
+    "README.md",
+    "Dockerfile",
+    "dist/cli.js",
+    "dist/index.js",
+    "dist/index.d.ts",
+}
 FORBIDDEN_NPM_PREFIXES = ("src/", "tests/")
+NPM_WORKSPACE_BY_PACKAGE = {
+    "sdk": "@usetemi/codex-sdk",
+    "proxy": "@usetemi/codex-openai-proxy",
+}
+REQUIRED_NPM_FILES_BY_PACKAGE = {
+    "sdk": REQUIRED_SDK_NPM_FILES,
+    "proxy": REQUIRED_PROXY_NPM_FILES,
+}
 
 
 def main() -> int:
-    errors: list[str] = []
-    npm_files = read_npm_pack_files()
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--package", choices=sorted(NPM_WORKSPACE_BY_PACKAGE), default="sdk"
+    )
+    args = parser.parse_args()
 
-    missing = sorted(REQUIRED_NPM_FILES - npm_files)
+    errors: list[str] = []
+    npm_files = read_npm_pack_files(args.package)
+    required = REQUIRED_NPM_FILES_BY_PACKAGE[args.package]
+
+    missing = sorted(required - npm_files)
     if missing:
         errors.append("npm package is missing required files: " + ", ".join(missing))
 
@@ -43,17 +67,17 @@ def main() -> int:
             print(error, file=sys.stderr)
         return 1
 
-    print("npm package files verified")
+    print(f"{args.package} npm package files verified")
     return 0
 
 
-def read_npm_pack_files() -> set[str]:
+def read_npm_pack_files(package: str) -> set[str]:
     output = subprocess.check_output(
         [
             "npm",
             "pack",
             "--workspace",
-            "@usetemi/codex-sdk",
+            NPM_WORKSPACE_BY_PACKAGE[package],
             "--dry-run",
             "--json",
         ],

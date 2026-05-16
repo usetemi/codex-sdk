@@ -21,6 +21,7 @@ class BumpCodexVersionTest(unittest.TestCase):
                 read_versions(root),
                 {
                     "typescript": "1.2.4",
+                    "proxy": "1.2.4",
                     "python": "1.2.4",
                     "elixir": "1.2.4",
                     "go": "1.2.4",
@@ -32,6 +33,15 @@ class BumpCodexVersionTest(unittest.TestCase):
             )
             self.assertEqual(package["dependencies"]["@openai/codex"], "1.2.4")
             self.assertEqual(package["dependencies"]["@openai/codex-sdk"], "^1.2.4")
+
+            proxy_package = json.loads(
+                (root / "apps/codex-openai-proxy/package.json").read_text()
+            )
+            self.assertEqual(proxy_package["version"], "1.2.4")
+            self.assertEqual(proxy_package["dependencies"]["@openai/codex"], "1.2.4")
+            self.assertEqual(
+                proxy_package["dependencies"]["@usetemi/codex-sdk"], "1.2.4"
+            )
 
             root_readme = (root / "README.md").read_text()
             self.assertIn("@usetemi/codex-sdk@1.2.4", root_readme)
@@ -47,6 +57,7 @@ class BumpCodexVersionTest(unittest.TestCase):
 
     def write_repo_files(self, root: Path) -> None:
         for path in [
+            "apps/codex-openai-proxy",
             "packages/typescript",
             "packages/python",
             "packages/elixir",
@@ -62,6 +73,20 @@ class BumpCodexVersionTest(unittest.TestCase):
                     "dependencies": {
                         "@openai/codex": "1.2.3",
                         "@openai/codex-sdk": "^1.2.3",
+                    },
+                },
+                indent=2,
+            )
+            + "\n"
+        )
+        (root / "apps/codex-openai-proxy/package.json").write_text(
+            json.dumps(
+                {
+                    "name": "@usetemi/codex-openai-proxy",
+                    "version": "1.2.3-1",
+                    "dependencies": {
+                        "@openai/codex": "1.2.3",
+                        "@usetemi/codex-sdk": "1.2.3-1",
                     },
                 },
                 indent=2,
@@ -101,6 +126,7 @@ version: "0.1.0",
 """
         for package in ["typescript", "python", "elixir", "go"]:
             (root / f"packages/{package}/README.md").write_text(package_readme)
+        (root / "apps/codex-openai-proxy/README.md").write_text(package_readme)
 
 
 if __name__ == "__main__":
