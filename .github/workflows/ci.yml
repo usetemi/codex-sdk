@@ -19,6 +19,51 @@ jobs:
       - run: npm run typescript:static
       - run: npm --workspace @usetemi/codex-sdk test
 
+  openai-compat:
+    runs-on: ubuntu-24.04
+    continue-on-error: ${{ matrix.allow_failure }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: pinned
+            node-openai-version: "6.38.0"
+            python-openai-version: "2.37.0"
+            go-openai-version: "v3.36.0"
+            allow_failure: false
+          - label: latest
+            node-openai-version: latest
+            python-openai-version: latest
+            go-openai-version: latest
+            allow_failure: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: packages/go/go.mod
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: "28"
+          elixir-version: "1.19"
+      - uses: astral-sh/setup-uv@v6
+      - run: mix local.hex --force
+      - run: mix local.rebar --force
+      - run: npm install
+      - run: npm run openai-compat:sdk
+        env:
+          OPENAI_COMPAT_NODE_VERSION: ${{ matrix.node-openai-version }}
+          OPENAI_COMPAT_PYTHON_VERSION: ${{ matrix.python-openai-version }}
+          OPENAI_COMPAT_GO_VERSION: ${{ matrix.go-openai-version }}
+      - if: matrix.label == 'pinned'
+        run: npm run openai-compat:openapi
+
   python:
     runs-on: ubuntu-24.04
     steps:

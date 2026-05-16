@@ -24,6 +24,10 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     },
+    "./openai-compat": {
+      "types": "./dist/openai-compat.d.ts",
+      "import": "./dist/openai-compat.js"
+    },
     "./transport": {
       "types": "./dist/transport.d.ts",
       "import": "./dist/transport.js"
@@ -36,6 +40,7 @@
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "compat:test": "tsx --test tests/compat/*.test.ts",
     "format:check": "oxfmt --check src tests",
     "lint": "oxlint src tests",
     "static": "npm run format:check && npm run lint && npm run typecheck",

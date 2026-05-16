@@ -7,6 +7,7 @@
   ],
   "scripts": {
     "check": "npm run static && npm test && npm run release:test && npm run package:check",
+    "compat:test": "npm run openai-compat:sdk && npm run openai-compat:openapi",
     "static": "npm run typescript:static && npm run python:static && npm run elixir:static && npm run go:static",
     "test": "npm --workspace @usetemi/codex-sdk test && npm run python:test && npm run elixir:test && npm run go:test",
     "package:check": "npm run typescript:package && npm run python:package && npm run elixir:package",
@@ -21,6 +22,8 @@
     "elixir:package": "cd packages/elixir && mix hex.build",
     "go:static": "cd packages/go && test -z \"$(gofmt -l .)\" && go vet ./...",
     "go:test": "cd packages/go && go test ./...",
+    "openai-compat:sdk": "npm --workspace @usetemi/codex-sdk run compat:test",
+    "openai-compat:openapi": "uv run --with pyyaml --with jsonschema python scripts/check_openai_openapi_subset.py",
     "release:test": "python3 -m unittest discover -s tests"
   }
 }

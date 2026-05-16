@@ -16,6 +16,8 @@ REQUIRED_NPM_FILES = {
     "LICENSE",
     "dist/index.js",
     "dist/index.d.ts",
+    "dist/openai-compat.js",
+    "dist/openai-compat.d.ts",
     "dist/transport.js",
     "dist/transport.d.ts",
 }

@@ -40,6 +40,7 @@ export {
   MessageRouter,
   encodeJsonRpcMessage,
 } from "./transport.js";
+export { createOpenAICompatHandler, createOpenAICompatServer } from "./openai-compat.js";
 export type {
   AppServerClientOptions,
   AppServerEvent,
@@ -49,3 +50,4 @@ export type {
   MalformedJsonLine,
   RoutedMessage,
 } from "./transport.js";
+export type { OpenAICompatHandler, OpenAICompatOptions } from "./openai-compat.js";
