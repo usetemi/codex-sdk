@@ -18,6 +18,10 @@ FROM node:24-slim
 
 WORKDIR /app
 
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends ca-certificates \
+  && rm -rf /var/lib/apt/lists/*
+
 ENV NODE_ENV=production
 ENV CODEX_OPENAI_PROXY_HOST=0.0.0.0
 ENV CODEX_OPENAI_PROXY_PORT=8080

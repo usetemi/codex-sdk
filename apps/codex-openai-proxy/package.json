@@ -1,6 +1,6 @@
 {
   "name": "@usetemi/codex-openai-proxy",
-  "version": "0.130.0-3",
+  "version": "0.130.0-4",
   "description": "OpenAI-compatible HTTP proxy for Codex app-server.",
   "type": "module",
   "license": "MIT",
@@ -43,7 +43,7 @@
   },
   "dependencies": {
     "@openai/codex": "0.130.0",
-    "@usetemi/codex-sdk": "0.130.0-3"
+    "@usetemi/codex-sdk": "0.130.0-4"
   },
   "devDependencies": {
     "@types/node": "^24.10.0",
