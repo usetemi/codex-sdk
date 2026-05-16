@@ -70,7 +70,7 @@ go get github.com/usetemi/codex-sdk/packages/go@v0.130.0-2
 
 `@usetemi/codex-openai-proxy` runs Codex app-server behind an OpenAI-compatible `/v1` HTTP API for standard OpenAI clients.
 
-Run the published GHCR image with Codex API-key auth:
+The GHCR image is public and can be pulled without `docker login`. Run it with Codex API-key auth:
 
 ```bash
 docker run --rm -p 8080:8080 \
