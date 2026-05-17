@@ -27,7 +27,7 @@ defmodule CodexSdk.MixProject do
     [
       {:jason, "~> 1.4"},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
-      {:credence, "~> 0.5.0", only: [:dev, :test], runtime: false},
+      {:ex_dna, "~> 1.5", only: [:dev, :test], runtime: false},
       {:ex_slop, "~> 0.4.1", only: [:dev, :test], runtime: false}
     ]
   end
@@ -38,7 +38,7 @@ defmodule CodexSdk.MixProject do
         "format --check-formatted",
         "compile --force --warnings-as-errors",
         "credo --strict",
-        "run scripts/credence_check.exs"
+        "ex_dna"
       ]
     ]
   end
