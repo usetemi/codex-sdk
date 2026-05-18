@@ -179,6 +179,13 @@ test("GET /auth is public operator UI", async (t) => {
   const body = await response.text();
   assert.match(body, /sessionStorage/);
   assert.match(body, /auth\/restart/);
+  assert.match(body, /href="data:,"/);
+  assert.match(body, /grid-template-columns: 1fr/);
+  assert.match(body, /id="copy-code"/);
+  assert.match(body, /copyUserCode/);
+  assert.match(body, /id="response-details"/);
+  assert.match(body, /Paste the proxy token in Proxy Token, token only, no Bearer prefix/);
+  assert.match(body, /The proxy rejected this token/);
 
   const apiResponse = await fetch(`${baseUrl}/auth/status`);
   assert.equal(apiResponse.status, 401);
@@ -195,11 +202,19 @@ test("auth management endpoints use proxy bearer auth", async (t) => {
 
   const missing = await fetch(`${baseUrl}/auth/status`);
   assert.equal(missing.status, 401);
+  assert.equal(
+    assertRecord(assertRecord(await missing.json()).error).message,
+    "Missing or invalid bearer token",
+  );
 
   const invalid = await fetch(`${baseUrl}/auth/status`, {
     headers: { authorization: "Bearer bad-token" },
   });
   assert.equal(invalid.status, 401);
+  assert.equal(
+    assertRecord(assertRecord(await invalid.json()).error).message,
+    "Missing or invalid bearer token",
+  );
 
   const valid = await fetch(`${baseUrl}/auth/status`, {
     headers: { authorization: "Bearer good-token" },

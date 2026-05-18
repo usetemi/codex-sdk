@@ -486,6 +486,7 @@ function authOperatorHtml(): string {
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="icon" href="data:,">
     <title>Codex Proxy Auth</title>
     <style>
       :root {
@@ -536,7 +537,7 @@ function authOperatorHtml(): string {
       }
 
       main {
-        width: min(1120px, calc(100% - 32px));
+        width: min(920px, calc(100% - 32px));
         margin: 0 auto;
         padding: 32px 0 48px;
       }
@@ -572,7 +573,7 @@ function authOperatorHtml(): string {
       .grid {
         display: grid;
         gap: 16px;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
+        grid-template-columns: 1fr;
       }
 
       .panel {
@@ -662,8 +663,15 @@ function authOperatorHtml(): string {
 
       .flow-output {
         display: grid;
+        gap: 12px;
+        grid-template-columns: 1fr;
+      }
+
+      .code-row {
+        display: grid;
         gap: 8px;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
+        grid-template-columns: minmax(0, 1fr) auto;
+        align-items: stretch;
       }
 
       .code {
@@ -679,6 +687,40 @@ function authOperatorHtml(): string {
           Consolas,
           monospace;
         font-size: 13px;
+      }
+
+      .code-copy-target {
+        border: 1px solid transparent;
+        cursor: pointer;
+        user-select: all;
+      }
+
+      .code-copy-target:focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: 2px;
+      }
+
+      .copy-message {
+        min-height: 20px;
+        margin-top: 6px;
+        font-size: 13px;
+        font-weight: 650;
+      }
+
+      details {
+        display: grid;
+        gap: 12px;
+      }
+
+      summary {
+        cursor: pointer;
+        font-size: 18px;
+        font-weight: 700;
+        line-height: 1.15;
+      }
+
+      details[open] pre {
+        margin-top: 12px;
       }
 
       pre {
@@ -699,11 +741,13 @@ function authOperatorHtml(): string {
         font-weight: 650;
       }
 
-      .status.ok {
+      .status.ok,
+      .copy-message.ok {
         color: var(--ok);
       }
 
-      .status.error {
+      .status.error,
+      .copy-message.error {
         color: var(--danger);
       }
 
@@ -721,9 +765,8 @@ function authOperatorHtml(): string {
           font-size: 26px;
         }
 
-        .grid,
-        .flow-output,
-        .token-row {
+        .token-row,
+        .code-row {
           grid-template-columns: 1fr;
         }
       }
@@ -775,7 +818,17 @@ function authOperatorHtml(): string {
               </div>
               <div>
                 <p>User code</p>
-                <div id="user-code" class="code">-</div>
+                <div class="code-row">
+                  <div
+                    id="user-code"
+                    class="code code-copy-target"
+                    role="button"
+                    tabindex="0"
+                    aria-label="Copy user code"
+                  >-</div>
+                  <button id="copy-code" type="button" disabled>Copy</button>
+                </div>
+                <p id="copy-message" class="copy-message" role="status"></p>
               </div>
             </div>
             <p id="device-message" class="status" role="status"></p>
@@ -796,8 +849,10 @@ function authOperatorHtml(): string {
         </section>
 
         <section class="panel" aria-labelledby="response-heading">
-          <h2 id="response-heading">Response</h2>
-          <pre id="response-output">{}</pre>
+          <details id="response-details">
+            <summary id="response-heading">Response JSON</summary>
+            <pre id="response-output">{}</pre>
+          </details>
         </section>
       </div>
     </main>
@@ -809,6 +864,7 @@ function authOperatorHtml(): string {
       const restartButton = document.querySelector('#restart-button');
       const deviceButton = document.querySelector('#device-button');
       const cancelButton = document.querySelector('#cancel-button');
+      const copyCodeButton = document.querySelector('#copy-code');
       const importButton = document.querySelector('#import-button');
       const authFileInput = document.querySelector('#auth-file');
       const authJsonInput = document.querySelector('#auth-json');
@@ -818,6 +874,7 @@ function authOperatorHtml(): string {
       const importMessage = document.querySelector('#import-message');
       const verificationUri = document.querySelector('#verification-uri');
       const userCode = document.querySelector('#user-code');
+      const copyMessage = document.querySelector('#copy-message');
       let activeFlowId = null;
       let pollTimer = null;
 
@@ -842,6 +899,18 @@ function authOperatorHtml(): string {
       cancelButton.addEventListener('click', () => {
         void cancelDeviceAuth();
       });
+      copyCodeButton.addEventListener('click', () => {
+        void copyUserCode();
+      });
+      userCode.addEventListener('click', () => {
+        void copyUserCode();
+      });
+      userCode.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          void copyUserCode();
+        }
+      });
       importButton.addEventListener('click', () => {
         void importAuthJson();
       });
@@ -863,6 +932,16 @@ function authOperatorHtml(): string {
       async function request(path, options) {
         const headers = new Headers((options && options.headers) || {});
         const bearer = token();
+        if (/^bearer\\s+/i.test(bearer)) {
+          showResponse({
+            error: {
+              message: 'Paste the token value without the Bearer prefix',
+            },
+          });
+          throw new Error(
+            'Paste only the proxy token in Proxy Token. Do not include the Bearer prefix.',
+          );
+        }
         if (bearer) {
           headers.set('authorization', 'Bearer ' + bearer);
         }
@@ -879,10 +958,15 @@ function authOperatorHtml(): string {
         }
         showResponse(body);
         if (!response.ok) {
-          const message =
+          let message =
             body && body.error && body.error.message
               ? body.error.message
               : 'HTTP ' + response.status;
+          if (response.status === 401) {
+            message = bearer
+              ? 'The proxy rejected this token. Check that you pasted the current proxy token without the Bearer prefix, then retry.'
+              : 'Paste the proxy token in Proxy Token, token only, no Bearer prefix, then retry.';
+          }
           throw new Error(message);
         }
         return body;
@@ -897,6 +981,12 @@ function authOperatorHtml(): string {
         element.textContent = message || '';
         element.classList.toggle('ok', kind === 'ok');
         element.classList.toggle('error', kind === 'error');
+      }
+
+      function setCopyMessage(message, kind) {
+        copyMessage.textContent = message || '';
+        copyMessage.classList.toggle('ok', kind === 'ok');
+        copyMessage.classList.toggle('error', kind === 'error');
       }
 
       async function refreshStatus() {
@@ -975,6 +1065,8 @@ function authOperatorHtml(): string {
         cancelButton.disabled = !activeFlowId || terminalFlow(flow);
         verificationUri.textContent = flow && flow.verification_uri ? flow.verification_uri : '-';
         userCode.textContent = flow && flow.user_code ? flow.user_code : '-';
+        copyCodeButton.disabled = !(flow && flow.user_code);
+        setCopyMessage('', '');
         if (flow && flow.verification_uri) {
           verificationUri.innerHTML = '';
           const link = document.createElement('a');
@@ -990,6 +1082,19 @@ function authOperatorHtml(): string {
         }
         const kind = flow.status === 'completed' ? 'ok' : terminalFlow(flow) ? 'error' : '';
         setMessage(deviceMessage, flow.status + ': ' + (flow.message || ''), kind);
+      }
+
+      async function copyUserCode() {
+        const code = userCode.textContent.trim();
+        if (!code || code === '-') {
+          return;
+        }
+        try {
+          await navigator.clipboard.writeText(code);
+          setCopyMessage('Copied user code.', 'ok');
+        } catch {
+          setCopyMessage('Copy failed. Select the code and copy it manually.', 'error');
+        }
       }
 
       function terminalFlow(flow) {
