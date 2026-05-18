@@ -62,6 +62,7 @@ export class CodexAuthConflictError extends Error {
 
 type CodexAuthManagerOptions = {
   onCredentialsChanged?: () => Promise<void>;
+  statusTimeoutMs?: number;
 };
 
 type DeviceFlow = CodexDeviceFlowSnapshot & {
@@ -77,6 +78,8 @@ type CommandResult = {
   signal: NodeJS.Signals | null;
   stdout: string;
   stderr: string;
+  timedOut: boolean;
+  timeoutMs: number;
 };
 
 const authFileName = "auth.json";
@@ -96,12 +99,14 @@ export function createCodexAuthManager(
 class CodexCliAuthManager implements CodexAuthManager {
   readonly #config: CliConfig;
   readonly #onCredentialsChanged: (() => Promise<void>) | undefined;
+  readonly #statusTimeoutMs: number;
   readonly #flows = new Map<string, DeviceFlow>();
   #activeFlowId: string | null = null;
 
   constructor(config: CliConfig, options: CodexAuthManagerOptions) {
     this.#config = config;
     this.#onCredentialsChanged = options.onCredentialsChanged;
+    this.#statusTimeoutMs = options.statusTimeoutMs ?? statusTimeoutMs;
   }
 
   async status(): Promise<CodexAuthStatus> {
@@ -110,7 +115,7 @@ class CodexCliAuthManager implements CodexAuthManager {
       this.#config.codexCommand,
       ["login", "status"],
       this.#codexEnv(),
-      statusTimeoutMs,
+      this.#statusTimeoutMs,
     );
 
     return parseLoginStatus(result);
@@ -406,6 +411,13 @@ function parseLoginStatus(result: CommandResult): CodexAuthStatus {
   const stderr = stripAnsi(result.stderr).trim();
   const message = stdout || stderr;
 
+  if (result.timedOut) {
+    return {
+      authenticated: false,
+      message: `codex login status timed out after ${formatDuration(result.timeoutMs)}`,
+    };
+  }
+
   if (result.code === 0) {
     const authType = stdout.match(/^Logged in using\s+(.+)$/i)?.[1];
     return {
@@ -441,8 +453,14 @@ function runCommand(
     });
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];
+    let timedOut = false;
+    let killTimer: NodeJS.Timeout | undefined;
     const timer = setTimeout(() => {
+      timedOut = true;
       child.kill("SIGTERM");
+      killTimer = setTimeout(() => {
+        child.kill("SIGKILL");
+      }, 1000);
     }, timeoutMs);
 
     child.stdout.on("data", (chunk: Buffer) => {
@@ -453,18 +471,35 @@ function runCommand(
     });
     child.once("error", (error) => {
       clearTimeout(timer);
+      if (killTimer) {
+        clearTimeout(killTimer);
+      }
       reject(error);
     });
     child.once("exit", (code, signal) => {
       clearTimeout(timer);
+      if (killTimer) {
+        clearTimeout(killTimer);
+      }
       resolve({
         code,
         signal,
         stdout: Buffer.concat(stdout).toString("utf8"),
         stderr: Buffer.concat(stderr).toString("utf8"),
+        timedOut,
+        timeoutMs,
       });
     });
   });
+}
+
+function formatDuration(ms: number): string {
+  if (ms % 1000 === 0) {
+    const seconds = ms / 1000;
+    return `${seconds} ${seconds === 1 ? "second" : "seconds"}`;
+  }
+
+  return `${ms}ms`;
 }
 
 function stripAnsi(value: string): string {

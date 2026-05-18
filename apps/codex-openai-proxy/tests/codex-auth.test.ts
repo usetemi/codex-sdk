@@ -77,3 +77,43 @@ test("Codex auth manager parses device login output and detects completed login"
   await manager.getDeviceFlow(started.flow_id);
   assert.equal(restarts, 1);
 });
+
+test("Codex auth manager reports login status timeout when Codex does not exit", async (t) => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-proxy-auth-timeout-"));
+  t.after(async () => {
+    await fs.rm(tempDir, { recursive: true, force: true });
+  });
+  const codexHome = path.join(tempDir, "codex-home");
+  const codexCommand = path.join(tempDir, "hanging-codex.mjs");
+  await fs.writeFile(
+    codexCommand,
+    [
+      "#!/usr/bin/env node",
+      "const args = process.argv.slice(2);",
+      "if (args[0] === 'login' && args[1] === 'status') {",
+      "  process.on('SIGTERM', () => {});",
+      "  setInterval(() => {}, 1000);",
+      "}",
+      "console.error('unexpected args: ' + args.join(' '));",
+      "process.exit(2);",
+      "",
+    ].join("\n"),
+    { mode: 0o755 },
+  );
+  await fs.chmod(codexCommand, 0o755);
+
+  const manager = createCodexAuthManager(
+    parseCliConfig(["--codex-command", codexCommand, "--codex-home", codexHome], {}),
+    { statusTimeoutMs: 50 },
+  );
+  t.after(async () => {
+    await manager.close();
+  });
+
+  const startedAt = Date.now();
+  assert.deepEqual(await manager.status(), {
+    authenticated: false,
+    message: "codex login status timed out after 50ms",
+  });
+  assert.ok(Date.now() - startedAt < 2_000);
+});
