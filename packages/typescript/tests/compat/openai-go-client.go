@@ -129,7 +129,7 @@ func main() {
 		},
 		PreviousResponseID: openai.String("resp_old"),
 	})
-	assertAPIError(err, 501, "unsupported_feature", "previous_response_id")
+	assertAPIError(err, 404, "invalid_request_error", "previous_response_id")
 
 	must(json.NewEncoder(os.Stdout).Encode(map[string]any{
 		"ok":     true,

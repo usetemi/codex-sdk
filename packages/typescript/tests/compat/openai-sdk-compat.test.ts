@@ -13,6 +13,8 @@ const execFileAsync = promisify(execFile);
 
 const NODE_OPENAI_VERSION = process.env.OPENAI_COMPAT_NODE_VERSION ?? "6.38.0";
 const PYTHON_OPENAI_VERSION = process.env.OPENAI_COMPAT_PYTHON_VERSION ?? "2.37.0";
+const NODE_AGENTS_VERSION = process.env.OPENAI_COMPAT_NODE_AGENTS_VERSION ?? "0.11.4";
+const PYTHON_AGENTS_VERSION = process.env.OPENAI_COMPAT_PYTHON_AGENTS_VERSION ?? "0.17.2";
 const GO_OPENAI_VERSION = process.env.OPENAI_COMPAT_GO_VERSION ?? "v3.36.0";
 const COMPAT_API_KEY = "compat-token";
 
@@ -24,6 +26,16 @@ test("openai-node release works against the Codex OpenAI-compatible facade", asy
 test("openai-python release works against the Codex OpenAI-compatible facade", async (t) => {
   const baseUrl = await startSdkCompatServer(t);
   await runOpenAIPythonClient(baseUrl, PYTHON_OPENAI_VERSION);
+});
+
+test("@openai/agents release runs a local function tool through Responses", async (t) => {
+  const baseUrl = await startAgentsSdkCompatServer(t);
+  await runOpenAIAgentsNodeClient(baseUrl, NODE_AGENTS_VERSION);
+});
+
+test("openai-agents release runs a local function tool through Responses", async (t) => {
+  const baseUrl = await startAgentsSdkCompatServer(t);
+  await runOpenAIAgentsPythonClient(baseUrl, PYTHON_AGENTS_VERSION);
 });
 
 test("openai-go release works against the Codex OpenAI-compatible facade", async (t) => {
@@ -43,6 +55,24 @@ async function startSdkCompatServer(t: {
   fake.modelPages = [{ data: [{ id: "codex-mini" }], nextCursor: null }];
   fake.responseText = "compat response";
   fake.streamDeltas = ["compat ", "response"];
+  const baseUrl = await startOpenAICompatFixtureServer(t, fake, { bearerToken: COMPAT_API_KEY });
+  return `${baseUrl}/v1`;
+}
+
+async function startAgentsSdkCompatServer(t: {
+  after: (fn: () => void | Promise<void>) => void;
+}): Promise<string> {
+  const fake = new FakeAppServer();
+  fake.modelPages = [{ data: [{ id: "codex-mini" }], nextCursor: null }];
+  fake.responseTexts = [
+    JSON.stringify({
+      type: "function_call",
+      name: "get_weather",
+      arguments: { city: "Tokyo" },
+    }),
+    "Agent saw sunny weather.",
+    "Plain agent response.",
+  ];
   const baseUrl = await startOpenAICompatFixtureServer(t, fake, { bearerToken: COMPAT_API_KEY });
   return `${baseUrl}/v1`;
 }
@@ -72,6 +102,31 @@ async function runOpenAINodeClient(baseUrl: string, version: string): Promise<vo
   });
 }
 
+async function runOpenAIAgentsNodeClient(baseUrl: string, version: string): Promise<void> {
+  await withTempDir("codex-openai-agents-node-", async (dir) => {
+    await writeFile(
+      path.join(dir, "package.json"),
+      JSON.stringify({ private: true, type: "module" }),
+      "utf8",
+    );
+    await copyFile(
+      path.join(import.meta.dirname, "openai-agents-node-client.mjs"),
+      path.join(dir, "client.mjs"),
+    );
+    await execChecked(
+      "npm",
+      ["install", "--no-audit", "--no-fund", "--silent", nodeAgentsPackage(version), "zod"],
+      {
+        cwd: dir,
+      },
+    );
+    await execChecked(process.execPath, ["client.mjs"], {
+      cwd: dir,
+      env: compatEnv(baseUrl),
+    });
+  });
+}
+
 async function runOpenAIPythonClient(baseUrl: string, version: string): Promise<void> {
   await withTempDir("codex-openai-python-", async (dir) => {
     await copyFile(
@@ -81,6 +136,23 @@ async function runOpenAIPythonClient(baseUrl: string, version: string): Promise<
     await execChecked(
       "uv",
       ["run", "--no-project", "--with", pythonPackage(version), "python", "client.py"],
+      {
+        cwd: dir,
+        env: compatEnv(baseUrl),
+      },
+    );
+  });
+}
+
+async function runOpenAIAgentsPythonClient(baseUrl: string, version: string): Promise<void> {
+  await withTempDir("codex-openai-agents-python-", async (dir) => {
+    await copyFile(
+      path.join(import.meta.dirname, "openai-agents-python-client.py"),
+      path.join(dir, "client.py"),
+    );
+    await execChecked(
+      "uv",
+      ["run", "--no-project", "--with", pythonAgentsPackage(version), "python", "client.py"],
       {
         cwd: dir,
         env: compatEnv(baseUrl),
@@ -127,8 +199,16 @@ function nodePackage(version: string): string {
   return version === "latest" ? "openai@latest" : `openai@${version}`;
 }
 
+function nodeAgentsPackage(version: string): string {
+  return version === "latest" ? "@openai/agents@latest" : `@openai/agents@${version}`;
+}
+
 function pythonPackage(version: string): string {
   return version === "latest" ? "openai" : `openai==${version}`;
+}
+
+function pythonAgentsPackage(version: string): string {
+  return version === "latest" ? "openai-agents" : `openai-agents==${version}`;
 }
 
 function goPackage(version: string): string {

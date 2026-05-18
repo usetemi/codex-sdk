@@ -1,6 +1,6 @@
 {
   "name": "@usetemi/codex-sdk",
-  "version": "0.130.0-5",
+  "version": "0.130.0-6",
   "description": "Temi convenience SDK and low-level transport helpers for Codex.",
   "type": "module",
   "license": "MIT",

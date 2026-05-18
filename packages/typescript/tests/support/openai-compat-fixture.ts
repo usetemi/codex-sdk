@@ -36,7 +36,9 @@ export class FakeAppServer {
     },
   ];
   responseText = "hello";
+  responseTexts: string[] = [];
   streamDeltas: string[] = [];
+  streamDeltasByTurn: string[][] = [];
   usage: TokenUsage = defaultUsage;
   #events: AppServerEvent[] = [];
   #waiters: ((result: IteratorResult<AppServerEvent>) => void)[] = [];
@@ -87,7 +89,9 @@ export class FakeAppServer {
       }
 
       queueMicrotask(() => {
-        this.#emitTurnEvents(threadId, turnId);
+        const responseText = this.responseTexts.shift() ?? this.responseText;
+        const streamDeltas = this.streamDeltasByTurn.shift() ?? this.streamDeltas;
+        this.#emitTurnEvents(threadId, turnId, responseText, streamDeltas);
       });
 
       return {
@@ -127,12 +131,17 @@ export class FakeAppServer {
     }
   }
 
-  #emitTurnEvents(threadId: string, turnId: string): void {
+  #emitTurnEvents(
+    threadId: string,
+    turnId: string,
+    responseText: string,
+    streamDeltas: string[],
+  ): void {
     this.#emitNotification("turn/started", {
       threadId,
       turn: { id: turnId, status: "inProgress", items: [], error: null },
     });
-    for (const delta of this.streamDeltas) {
+    for (const delta of streamDeltas) {
       this.#emitNotification("item/agentMessage/delta", {
         threadId,
         turnId,
@@ -152,7 +161,7 @@ export class FakeAppServer {
     const item = {
       type: "agentMessage",
       id: "item-1",
-      text: this.responseText,
+      text: responseText,
       phase: null,
       memoryCitation: null,
     };

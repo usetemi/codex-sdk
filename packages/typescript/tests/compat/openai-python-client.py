@@ -89,10 +89,11 @@ try:
         previous_response_id="resp_old",
     )
 except APIStatusError as exc:
-    assert exc.status_code == 501
+    assert exc.status_code == 404
     body = exc.response.json()
-    assert body["error"]["type"] == "unsupported_feature"
+    assert body["error"]["type"] == "invalid_request_error"
     assert body["error"]["param"] == "previous_response_id"
+    assert body["error"]["code"] == "not_found"
 else:
     raise AssertionError(
         "expected unsupported responses request to raise APIStatusError"

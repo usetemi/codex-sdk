@@ -87,9 +87,10 @@ await assert.rejects(
       previous_response_id: "resp_old",
     }),
   (error) => {
-    assert.equal(error.status, 501);
-    assert.equal(error.error?.type, "unsupported_feature");
+    assert.equal(error.status, 404);
+    assert.equal(error.error?.type, "invalid_request_error");
     assert.equal(error.error?.param, "previous_response_id");
+    assert.equal(error.error?.code, "not_found");
     return true;
   },
 );

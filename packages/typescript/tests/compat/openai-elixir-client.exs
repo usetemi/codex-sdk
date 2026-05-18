@@ -138,7 +138,7 @@ defmodule CompatClient do
     assert(get_in(chat_error, ["error", "type"]) == "unsupported_feature", "unexpected chat error type")
     assert(get_in(chat_error, ["error", "param"]) == "n", "unexpected chat error param")
 
-    {501, response_error} =
+    {404, response_error} =
       json_request(
         :post,
         "#{base_url}/responses",
@@ -151,7 +151,7 @@ defmodule CompatClient do
       )
 
     assert(
-      get_in(response_error, ["error", "type"]) == "unsupported_feature",
+      get_in(response_error, ["error", "type"]) == "invalid_request_error",
       "unexpected responses error type"
     )
 
@@ -159,6 +159,8 @@ defmodule CompatClient do
       get_in(response_error, ["error", "param"]) == "previous_response_id",
       "unexpected responses error param"
     )
+
+    assert(get_in(response_error, ["error", "code"]) == "not_found", "unexpected responses code")
 
     IO.puts(Jason.encode!(%{ok: true, client: "raw-elixir"}))
   end

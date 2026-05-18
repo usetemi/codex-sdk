@@ -172,6 +172,176 @@ test("POST /v1/responses maps instructions, input array, images, and output_text
   assert.equal(assertRecord(input[2]).type, "localImage");
 });
 
+test("POST /v1/responses accepts Agents SDK default no-tool fields", async (t) => {
+  const fake = new FakeAppServer();
+  fake.responseText = "no tools";
+  const baseUrl = await startOpenAICompatFixtureServer(t, fake);
+
+  const response = await fetch(`${baseUrl}/v1/responses`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      model: "codex-mini",
+      input: "hello",
+      tools: [],
+      tool_choice: "auto",
+      parallel_tool_calls: false,
+      text: { format: { type: "text" } },
+      include: [],
+      store: false,
+      previous_response_id: null,
+    }),
+  });
+
+  assert.equal(response.status, 200);
+  assert.equal(assertRecord(await response.json()).output_text, "no tools");
+});
+
+test("POST /v1/responses returns function_call items for local function tools", async (t) => {
+  const fake = new FakeAppServer();
+  fake.responseText = toolEnvelope("get_weather", { city: "Tokyo" });
+  const baseUrl = await startOpenAICompatFixtureServer(t, fake);
+
+  const response = await fetch(`${baseUrl}/v1/responses`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      model: "codex-mini",
+      input: "Weather in Tokyo?",
+      tools: [weatherTool()],
+      tool_choice: "auto",
+      parallel_tool_calls: true,
+    }),
+  });
+
+  assert.equal(response.status, 200);
+  const json = assertRecord(await response.json());
+  assert.equal(json.output_text, "");
+  const output = assertArray(json.output);
+  const call = assertRecord(output[0]);
+  assert.equal(call.type, "function_call");
+  assert.equal(call.name, "get_weather");
+  assert.equal(call.status, "completed");
+  assert.equal(call.arguments, JSON.stringify({ city: "Tokyo" }));
+
+  const turnStart = assertRecord(
+    fake.requests.find((request) => request.method === "turn/start")?.params,
+  );
+  assert.match(String(assertRecord(assertArray(turnStart.input)[0]).text), /openai_compat_tools/);
+});
+
+test("POST /v1/responses continues a proxy response with function_call_output", async (t) => {
+  const fake = new FakeAppServer();
+  fake.responseTexts = [toolEnvelope("get_weather", { city: "Tokyo" }), "Tokyo is sunny."];
+  const baseUrl = await startOpenAICompatFixtureServer(t, fake);
+
+  const first = await fetch(`${baseUrl}/v1/responses`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      model: "codex-mini",
+      input: "Weather in Tokyo?",
+      tools: [weatherTool()],
+    }),
+  });
+  assert.equal(first.status, 200);
+  const firstJson = assertRecord(await first.json());
+  const call = assertRecord(assertArray(firstJson.output)[0]);
+
+  const second = await fetch(`${baseUrl}/v1/responses`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      model: "codex-mini",
+      previous_response_id: firstJson.id,
+      input: [
+        {
+          type: "function_call_output",
+          call_id: call.call_id,
+          output: "sunny",
+        },
+      ],
+      tools: [weatherTool()],
+    }),
+  });
+
+  assert.equal(second.status, 200);
+  assert.equal(assertRecord(await second.json()).output_text, "Tokyo is sunny.");
+  const turnStarts = fake.requests.filter((request) => request.method === "turn/start");
+  assert.equal(fake.requests.filter((request) => request.method === "thread/start").length, 1);
+  assert.equal(
+    recordParam(turnStarts[0]?.params, "threadId"),
+    recordParam(turnStarts[1]?.params, "threadId"),
+  );
+  const followUpInput = assertArray(assertRecord(turnStarts[1]?.params).input);
+  assert.match(String(assertRecord(followUpInput.at(-1)).text), /sunny/);
+});
+
+test("POST /v1/responses returns OpenAI-style 404 for unknown previous_response_id", async (t) => {
+  const fake = new FakeAppServer();
+  const baseUrl = await startOpenAICompatFixtureServer(t, fake);
+
+  const response = await fetch(`${baseUrl}/v1/responses`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      model: "codex-mini",
+      input: "hello",
+      previous_response_id: "resp_missing",
+    }),
+  });
+
+  assert.equal(response.status, 404);
+  const error = assertRecord(assertRecord(await response.json()).error);
+  assert.equal(error.type, "invalid_request_error");
+  assert.equal(error.param, "previous_response_id");
+  assert.equal(error.code, "not_found");
+});
+
+test("POST /v1/responses rejects hosted and non-function tools", async (t) => {
+  const fake = new FakeAppServer();
+  const baseUrl = await startOpenAICompatFixtureServer(t, fake);
+
+  const response = await fetch(`${baseUrl}/v1/responses`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      model: "codex-mini",
+      input: "search",
+      tools: [{ type: "web_search" }],
+    }),
+  });
+
+  assert.equal(response.status, 501);
+  const error = assertRecord(assertRecord(await response.json()).error);
+  assert.equal(error.type, "unsupported_feature");
+  assert.equal(error.param, "tools.0.type");
+});
+
+test("POST /v1/chat/completions returns tool_calls for function tools", async (t) => {
+  const fake = new FakeAppServer();
+  fake.responseText = toolEnvelope("get_weather", { city: "Tokyo" });
+  const baseUrl = await startOpenAICompatFixtureServer(t, fake);
+
+  const response = await fetch(`${baseUrl}/v1/chat/completions`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      model: "codex-mini",
+      messages: [{ role: "user", content: "Weather in Tokyo?" }],
+      tools: [{ type: "function", function: weatherTool() }],
+    }),
+  });
+
+  assert.equal(response.status, 200);
+  const choice = assertRecord(assertArray(assertRecord(await response.json()).choices)[0]);
+  assert.equal(choice.finish_reason, "tool_calls");
+  const message = assertRecord(choice.message);
+  const toolCall = assertRecord(assertArray(message.tool_calls)[0]);
+  assert.equal(toolCall.type, "function");
+  assert.equal(assertRecord(toolCall.function).name, "get_weather");
+});
+
 test("unsupported OpenAI-compatible fields return 501 error JSON", async (t) => {
   const fake = new FakeAppServer();
   const baseUrl = await startOpenAICompatFixtureServer(t, fake);
@@ -201,14 +371,11 @@ test("unsupported OpenAI-compatible fields return 501 error JSON", async (t) => 
     body: JSON.stringify({
       model: "codex-mini",
       input: "hello",
-      previous_response_id: "resp_old",
+      background: true,
     }),
   });
   assert.equal(responses.status, 501);
-  assert.equal(
-    assertRecord(assertRecord(await responses.json()).error).param,
-    "previous_response_id",
-  );
+  assert.equal(assertRecord(assertRecord(await responses.json()).error).param, "background");
 });
 
 test("chat streaming emits role chunk, deltas, final usage chunk, and DONE", async (t) => {
@@ -285,6 +452,43 @@ test("responses streaming emits Responses API event order", async (t) => {
   assert.equal(JSON.parse(events[4].data).response.output_text, "hello");
 });
 
+test("responses streaming emits function_call events and final response output", async (t) => {
+  const fake = new FakeAppServer();
+  fake.responseText = toolEnvelope("get_weather", { city: "Tokyo" });
+  const baseUrl = await startOpenAICompatFixtureServer(t, fake);
+
+  const response = await fetch(`${baseUrl}/v1/responses`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      model: "codex-mini",
+      stream: true,
+      input: "Weather in Tokyo?",
+      tools: [weatherTool()],
+    }),
+  });
+
+  assert.equal(response.status, 200);
+  const events = parseSse(await response.text());
+  assert.deepEqual(
+    events.map((event) => event.event),
+    [
+      "response.created",
+      "response.output_item.added",
+      "response.function_call_arguments.delta",
+      "response.function_call_arguments.done",
+      "response.output_item.done",
+      "response.completed",
+    ],
+  );
+  const done = assertRecord(JSON.parse(events[3].data));
+  assert.equal(done.name, "get_weather");
+  assert.equal(done.arguments, JSON.stringify({ city: "Tokyo" }));
+  const completed = assertRecord(JSON.parse(events[5].data));
+  const output = assertArray(assertRecord(completed.response).output);
+  assert.equal(assertRecord(output[0]).type, "function_call");
+});
+
 function parseSse(text: string): { event: string | null; data: string }[] {
   return text
     .trim()
@@ -306,6 +510,31 @@ function parseSse(text: string): { event: string | null; data: string }[] {
         data: data.join("\n"),
       };
     });
+}
+
+function weatherTool(): Record<string, unknown> {
+  return {
+    type: "function",
+    name: "get_weather",
+    description: "Get the weather for a city.",
+    parameters: {
+      type: "object",
+      properties: {
+        city: { type: "string" },
+      },
+      required: ["city"],
+      additionalProperties: false,
+    },
+    strict: true,
+  };
+}
+
+function toolEnvelope(name: string, args: Record<string, unknown>): string {
+  return JSON.stringify({
+    type: "function_call",
+    name,
+    arguments: args,
+  });
 }
 
 function recordParam(params: unknown, key: string): unknown {

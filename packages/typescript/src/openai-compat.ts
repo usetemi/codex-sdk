@@ -14,6 +14,37 @@ import {
 
 type JsonRecord = Record<string, unknown>;
 
+type ResponseStatus = "in_progress" | "completed";
+
+type ResponsesOutputItem = JsonRecord & {
+  id: string;
+  type: string;
+};
+
+type FunctionToolDefinition = {
+  name: string;
+  description: string;
+  parameters: unknown;
+  strict?: boolean;
+};
+
+type FunctionCallRecord = {
+  id: string;
+  callId: string;
+  name: string;
+  arguments: string;
+};
+
+type ResponseContinuationState = {
+  id: string;
+  threadId: string;
+  outputItems: ResponsesOutputItem[];
+  toolCalls: Map<string, FunctionCallRecord>;
+  tools: FunctionToolDefinition[];
+  status: ResponseStatus;
+  createdAtMs: number;
+};
+
 type AppServerProtocolClient = {
   request(method: string, params?: unknown): Promise<unknown>;
   respond?(id: string | number, result: unknown): Promise<void>;
@@ -58,8 +89,10 @@ type TokenUsageBreakdown = {
 };
 
 type CompletedTurn = {
+  threadId: string;
   text: string;
   usage: TokenUsageBreakdown | null;
+  rawOutputItems: JsonRecord[];
 };
 
 export type OpenAICompatOptions = {
@@ -161,6 +194,50 @@ class ImageTempFiles {
   }
 }
 
+class ResponseStateStore {
+  readonly #ttlMs: number;
+  readonly #maxEntries: number;
+  readonly #states = new Map<string, ResponseContinuationState>();
+
+  constructor(ttlMs = 60 * 60 * 1000, maxEntries = 256) {
+    this.#ttlMs = ttlMs;
+    this.#maxEntries = maxEntries;
+  }
+
+  get(id: string): ResponseContinuationState | null {
+    this.#sweepExpired();
+    const state = this.#states.get(id);
+    if (!state) {
+      return null;
+    }
+
+    this.#states.delete(id);
+    this.#states.set(id, state);
+    return state;
+  }
+
+  set(state: ResponseContinuationState): void {
+    this.#sweepExpired();
+    this.#states.set(state.id, state);
+    while (this.#states.size > this.#maxEntries) {
+      const oldest = this.#states.keys().next().value;
+      if (typeof oldest !== "string") {
+        break;
+      }
+      this.#states.delete(oldest);
+    }
+  }
+
+  #sweepExpired(): void {
+    const now = Date.now();
+    for (const [id, state] of this.#states.entries()) {
+      if (now - state.createdAtMs > this.#ttlMs) {
+        this.#states.delete(id);
+      }
+    }
+  }
+}
+
 class AppServerConnection {
   readonly #options: OpenAICompatOptions;
   #clientPromise: Promise<AppServerProtocolClient> | null = null;
@@ -193,7 +270,7 @@ class AppServerConnection {
           clientInfo: {
             name: "usetemi-codex-sdk",
             title: "Temi Codex SDK OpenAI Compatibility",
-            version: "0.130.0-5",
+            version: "0.130.0-6",
           },
           capabilities: {
             experimentalApi: true,
@@ -278,9 +355,10 @@ class AppServerConnection {
 
 export function createOpenAICompatHandler(options: OpenAICompatOptions = {}): OpenAICompatHandler {
   const connection = new AppServerConnection(options);
+  const responseStates = new ResponseStateStore();
 
   const handler = ((req: IncomingMessage, res: ServerResponse) => {
-    void handleRequest(req, res, options, connection);
+    void handleRequest(req, res, options, connection, responseStates);
   }) as OpenAICompatHandler;
 
   handler.ready = async () => {
@@ -308,6 +386,7 @@ async function handleRequest(
   res: ServerResponse,
   options: OpenAICompatOptions,
   connection: AppServerConnection,
+  responseStates: ResponseStateStore,
 ): Promise<void> {
   try {
     if (!isAuthorized(req, options.bearerToken)) {
@@ -327,7 +406,19 @@ async function handleRequest(
     }
 
     if (req.method === "POST" && url.pathname === "/v1/responses") {
-      await handleResponses(req, res, options, connection);
+      await handleResponses(req, res, options, connection, responseStates);
+      return;
+    }
+
+    if (isUnsupportedAgentsEndpoint(url.pathname)) {
+      sendOpenAIError(
+        res,
+        501,
+        `Unsupported OpenAI-compatible endpoint: ${req.method ?? "GET"} ${url.pathname}`,
+        "unsupported_feature",
+        null,
+        "unsupported",
+      );
       return;
     }
 
@@ -406,16 +497,31 @@ async function handleChatCompletions(
 
   try {
     const input = await mapChatInput(body, tempFiles);
+    const tools = parseChatFunctionTools(body);
+    validateToolChoice(body.tool_choice ?? body.function_call, tools, "tool_choice");
+    const codexInput = withToolContract(input, tools, {
+      toolChoice: body.tool_choice ?? body.function_call,
+      parallelToolCalls: body.parallel_tool_calls,
+    });
     const model = resolveRequestModel(body, options);
 
     if (stream) {
-      await streamChatCompletion(res, body, input, model, options, connection, tempFiles);
+      await streamChatCompletion(
+        res,
+        body,
+        codexInput,
+        model,
+        options,
+        connection,
+        tempFiles,
+        tools,
+      );
       return;
     }
 
-    const turn = await runCodexTurn(connection, input, model, options);
+    const turn = await runCodexTurn(connection, codexInput, model, options);
     await tempFiles.cleanup();
-    sendJson(res, 200, buildChatCompletionResponse(turn, model));
+    sendJson(res, 200, buildChatCompletionResponse(turn, model, outputItemsFromTurn(turn, tools)));
   } finally {
     await tempFiles.cleanup();
   }
@@ -426,6 +532,7 @@ async function handleResponses(
   res: ServerResponse,
   options: OpenAICompatOptions,
   connection: AppServerConnection,
+  responseStates: ResponseStateStore,
 ): Promise<void> {
   const body = expectRecord(await readJsonBody(req), "Request body must be a JSON object");
   rejectUnsupportedCreateFields(body, "responses");
@@ -433,17 +540,44 @@ async function handleResponses(
   const tempFiles = new ImageTempFiles(options.imageTempDir);
 
   try {
-    const input = await mapResponsesInput(body, tempFiles);
+    const previousState = resolvePreviousResponseState(body, responseStates);
+    const tools = parseResponsesFunctionTools(body, previousState?.tools ?? []);
+    validateToolChoice(body.tool_choice, tools, "tool_choice");
+    const input = await mapResponsesInput(body, tempFiles, previousState);
+    const codexInput = withToolContract(input, tools, {
+      toolChoice: body.tool_choice,
+      parallelToolCalls: body.parallel_tool_calls,
+    });
     const model = resolveRequestModel(body, options);
 
     if (stream) {
-      await streamResponse(res, input, model, options, connection, tempFiles);
+      await streamResponse(
+        res,
+        codexInput,
+        model,
+        options,
+        connection,
+        tempFiles,
+        tools,
+        responseStates,
+        previousState,
+      );
       return;
     }
 
-    const turn = await runCodexTurn(connection, input, model, options);
+    const turn = await runCodexTurn(
+      connection,
+      codexInput,
+      model,
+      options,
+      {},
+      previousState?.threadId,
+    );
     await tempFiles.cleanup();
-    sendJson(res, 200, buildResponseObject(turn, model));
+    const responseId = `resp_${randomUUID()}`;
+    const outputItems = outputItemsFromTurn(turn, tools);
+    responseStates.set(responseStateFromTurn(responseId, turn, outputItems, tools));
+    sendJson(res, 200, buildResponseObject(turn, model, responseId, outputItems));
   } finally {
     await tempFiles.cleanup();
   }
@@ -459,15 +593,18 @@ async function runCodexTurn(
     isAborted?: () => boolean;
     onTurnStarted?: (threadId: string, turnId: string) => void;
   } = {},
+  existingThreadId?: string,
 ): Promise<CompletedTurn> {
-  const thread = parseThreadStartResponse(
-    await connection.request("thread/start", buildThreadStartParams(model, options)),
-  );
-  const threadId = thread.thread.id;
+  const threadId =
+    existingThreadId ??
+    parseThreadStartResponse(
+      await connection.request("thread/start", buildThreadStartParams(model, options)),
+    ).thread.id;
 
   let turnId: string | null = null;
   let finalText = "";
   let streamedText = "";
+  const rawOutputItems: JsonRecord[] = [];
   let usage: TokenUsageBreakdown | null = null;
   let settled = false;
   let resolveCompleted!: () => void;
@@ -511,6 +648,9 @@ async function runCodexTurn(
         break;
       }
       case "rawResponseItem/completed": {
+        if (isRecord(params.item)) {
+          rawOutputItems.push(params.item);
+        }
         const text = outputTextFromRawResponseItem(params.item);
         if (text) {
           finalText = text;
@@ -590,8 +730,10 @@ async function runCodexTurn(
 
     await completed;
     return {
+      threadId,
       text: finalText || streamedText,
       usage,
+      rawOutputItems,
     };
   } catch (error) {
     if (turnId) {
@@ -611,6 +753,7 @@ async function streamChatCompletion(
   options: OpenAICompatOptions,
   connection: AppServerConnection,
   tempFiles: ImageTempFiles,
+  tools: FunctionToolDefinition[],
 ): Promise<void> {
   const id = `chatcmpl-${randomUUID()}`;
   const created = nowSeconds();
@@ -642,7 +785,7 @@ async function streamChatCompletion(
     const turn = await runCodexTurn(connection, input, model, options, {
       isAborted: () => closed,
       onTextDelta: (delta) => {
-        if (!closed && delta) {
+        if (!closed && delta && tools.length === 0) {
           streamedText += delta;
           writeSseData(res, {
             id,
@@ -660,9 +803,37 @@ async function streamChatCompletion(
         }
       },
     });
+    const outputItems = outputItemsFromTurn(turn, tools);
+    const functionCall = firstFunctionCall(outputItems);
 
     if (!closed) {
-      if (turn.text && !streamedText) {
+      if (functionCall) {
+        writeSseData(res, {
+          id,
+          object: "chat.completion.chunk",
+          created,
+          model: model ?? "codex",
+          choices: [
+            {
+              index: 0,
+              delta: {
+                tool_calls: [
+                  {
+                    index: 0,
+                    id: functionCall.callId,
+                    type: "function",
+                    function: {
+                      name: functionCall.name,
+                      arguments: functionCall.arguments,
+                    },
+                  },
+                ],
+              },
+              finish_reason: null,
+            },
+          ],
+        });
+      } else if (turn.text && !streamedText) {
         writeSseData(res, {
           id,
           object: "chat.completion.chunk",
@@ -686,7 +857,7 @@ async function streamChatCompletion(
           {
             index: 0,
             delta: {},
-            finish_reason: "stop",
+            finish_reason: functionCall ? "tool_calls" : "stop",
           },
         ],
         ...(includeUsage ? { usage: mapChatUsage(turn.usage) } : {}),
@@ -712,6 +883,9 @@ async function streamResponse(
   options: OpenAICompatOptions,
   connection: AppServerConnection,
   tempFiles: ImageTempFiles,
+  tools: FunctionToolDefinition[],
+  responseStates: ResponseStateStore,
+  previousState: ResponseContinuationState | null,
 ): Promise<void> {
   const responseId = `resp_${randomUUID()}`;
   const messageId = `msg_${randomUUID()}`;
@@ -727,27 +901,40 @@ async function streamResponse(
   writeSseHeaders(res);
   writeSseEvent(res, "response.created", {
     type: "response.created",
-    response: baseResponseObject(responseId, createdAt, model, "in_progress", "", null, messageId),
+    response: baseResponseObject(responseId, createdAt, model, "in_progress", [], null),
   });
 
   try {
-    const turn = await runCodexTurn(connection, input, model, options, {
-      isAborted: () => closed,
-      onTextDelta: (delta) => {
-        if (!closed && delta) {
-          text += delta;
-          writeSseEvent(res, "response.output_text.delta", {
-            type: "response.output_text.delta",
-            response_id: responseId,
-            item_id: messageId,
-            output_index: 0,
-            content_index: 0,
-            delta,
-          });
-        }
+    const turn = await runCodexTurn(
+      connection,
+      input,
+      model,
+      options,
+      {
+        isAborted: () => closed,
+        onTextDelta: (delta) => {
+          if (!closed && delta && tools.length === 0) {
+            text += delta;
+            writeSseEvent(res, "response.output_text.delta", {
+              type: "response.output_text.delta",
+              response_id: responseId,
+              item_id: messageId,
+              output_index: 0,
+              content_index: 0,
+              delta,
+            });
+          }
+        },
       },
-    });
-    if (turn.text && turn.text !== text) {
+      previousState?.threadId,
+    );
+    const outputItems = outputItemsFromTurn(turn, tools, messageId);
+    const functionCall = firstFunctionCall(outputItems);
+    if (functionCall) {
+      if (!closed) {
+        writeFunctionCallSseEvents(res, responseId, functionCall);
+      }
+    } else if (turn.text && turn.text !== text) {
       if (!text && !closed) {
         writeSseEvent(res, "response.output_text.delta", {
           type: "response.output_text.delta",
@@ -762,14 +949,17 @@ async function streamResponse(
     }
 
     if (!closed) {
-      writeSseEvent(res, "response.output_text.done", {
-        type: "response.output_text.done",
-        response_id: responseId,
-        item_id: messageId,
-        output_index: 0,
-        content_index: 0,
-        text,
-      });
+      if (!functionCall) {
+        writeSseEvent(res, "response.output_text.done", {
+          type: "response.output_text.done",
+          response_id: responseId,
+          item_id: messageId,
+          output_index: 0,
+          content_index: 0,
+          text,
+        });
+      }
+      responseStates.set(responseStateFromTurn(responseId, turn, outputItems, tools));
       writeSseEvent(res, "response.completed", {
         type: "response.completed",
         response: baseResponseObject(
@@ -777,9 +967,8 @@ async function streamResponse(
           createdAt,
           model,
           "completed",
-          text,
+          outputItems,
           turn.usage,
-          messageId,
         ),
       });
       res.end();
@@ -814,7 +1003,36 @@ function buildThreadStartParams(
   });
 }
 
-function buildChatCompletionResponse(turn: CompletedTurn, model: string | undefined): JsonRecord {
+function buildChatCompletionResponse(
+  turn: CompletedTurn,
+  model: string | undefined,
+  outputItems: ResponsesOutputItem[],
+): JsonRecord {
+  const functionCall = firstFunctionCall(outputItems);
+  const message = functionCall
+    ? {
+        role: "assistant",
+        content: null,
+        refusal: null,
+        annotations: [],
+        tool_calls: [
+          {
+            id: functionCall.callId,
+            type: "function",
+            function: {
+              name: functionCall.name,
+              arguments: functionCall.arguments,
+            },
+          },
+        ],
+      }
+    : {
+        role: "assistant",
+        content: outputTextFromOutputItems(outputItems) || turn.text,
+        refusal: null,
+        annotations: [],
+      };
+
   return {
     id: `chatcmpl-${randomUUID()}`,
     object: "chat.completion",
@@ -823,41 +1041,34 @@ function buildChatCompletionResponse(turn: CompletedTurn, model: string | undefi
     choices: [
       {
         index: 0,
-        message: {
-          role: "assistant",
-          content: turn.text,
-          refusal: null,
-          annotations: [],
-        },
+        message,
         logprobs: null,
-        finish_reason: "stop",
+        finish_reason: functionCall ? "tool_calls" : "stop",
       },
     ],
     usage: mapChatUsage(turn.usage),
   };
 }
 
-function buildResponseObject(turn: CompletedTurn, model: string | undefined): JsonRecord {
-  return baseResponseObject(
-    `resp_${randomUUID()}`,
-    nowSeconds(),
-    model,
-    "completed",
-    turn.text,
-    turn.usage,
-    `msg_${randomUUID()}`,
-  );
+function buildResponseObject(
+  turn: CompletedTurn,
+  model: string | undefined,
+  responseId: string,
+  outputItems: ResponsesOutputItem[],
+): JsonRecord {
+  return baseResponseObject(responseId, nowSeconds(), model, "completed", outputItems, turn.usage);
 }
 
 function baseResponseObject(
   id: string,
   createdAt: number,
   model: string | undefined,
-  status: "in_progress" | "completed",
-  text: string,
+  status: ResponseStatus,
+  outputItems: ResponsesOutputItem[],
   usage: TokenUsageBreakdown | null,
-  messageId: string,
 ): JsonRecord {
+  const output = status === "completed" ? outputItems : [];
+  const outputText = outputTextFromOutputItems(output);
   return {
     id,
     object: "response",
@@ -865,25 +1076,8 @@ function baseResponseObject(
     completed_at: status === "completed" ? createdAt : null,
     status,
     model: model ?? "codex",
-    output: text
-      ? [
-          {
-            id: messageId,
-            type: "message",
-            role: "assistant",
-            status: "completed",
-            content: [
-              {
-                type: "output_text",
-                text,
-                annotations: [],
-                logprobs: [],
-              },
-            ],
-          },
-        ]
-      : [],
-    output_text: text,
+    output,
+    output_text: outputText,
     usage: usage ? mapResponsesUsage(usage) : null,
     error: null,
     incomplete_details: null,
@@ -895,6 +1089,314 @@ function baseResponseObject(
     temperature: null,
     top_p: null,
   };
+}
+
+function responseStateFromTurn(
+  responseId: string,
+  turn: CompletedTurn,
+  outputItems: ResponsesOutputItem[],
+  tools: FunctionToolDefinition[],
+): ResponseContinuationState {
+  return {
+    id: responseId,
+    threadId: turn.threadId,
+    outputItems,
+    toolCalls: collectFunctionCalls(outputItems),
+    tools,
+    status: "completed",
+    createdAtMs: Date.now(),
+  };
+}
+
+function outputItemsFromTurn(
+  turn: CompletedTurn,
+  tools: FunctionToolDefinition[],
+  messageId = `msg_${randomUUID()}`,
+): ResponsesOutputItem[] {
+  const rawFunctionCalls = normalizeRawFunctionCalls(turn.rawOutputItems, tools);
+  if (rawFunctionCalls.length > 0) {
+    return rawFunctionCalls;
+  }
+
+  const envelopeCalls = parseFunctionCallEnvelope(turn.text, tools);
+  if (envelopeCalls.length > 0) {
+    return envelopeCalls;
+  }
+
+  if (!turn.text) {
+    return [];
+  }
+
+  return [messageOutputItem(messageId, turn.text)];
+}
+
+function messageOutputItem(id: string, text: string): ResponsesOutputItem {
+  return {
+    id,
+    type: "message",
+    role: "assistant",
+    status: "completed",
+    content: [
+      {
+        type: "output_text",
+        text,
+        annotations: [],
+        logprobs: [],
+      },
+    ],
+  };
+}
+
+function outputTextFromOutputItems(items: ResponsesOutputItem[]): string {
+  return items
+    .map((item) => {
+      if (item.type !== "message" || !Array.isArray(item.content)) {
+        return "";
+      }
+      return item.content
+        .map((content) =>
+          isRecord(content) && content.type === "output_text" && typeof content.text === "string"
+            ? content.text
+            : "",
+        )
+        .join("");
+    })
+    .join("");
+}
+
+function firstFunctionCall(items: ResponsesOutputItem[]): FunctionCallRecord | null {
+  for (const item of items) {
+    const call = functionCallRecord(item);
+    if (call) {
+      return call;
+    }
+  }
+
+  return null;
+}
+
+function collectFunctionCalls(items: ResponsesOutputItem[]): Map<string, FunctionCallRecord> {
+  const calls = new Map<string, FunctionCallRecord>();
+  for (const item of items) {
+    const call = functionCallRecord(item);
+    if (call) {
+      calls.set(call.callId, call);
+    }
+  }
+
+  return calls;
+}
+
+function functionCallRecord(item: ResponsesOutputItem): FunctionCallRecord | null {
+  if (
+    item.type !== "function_call" ||
+    typeof item.id !== "string" ||
+    typeof item.call_id !== "string" ||
+    typeof item.name !== "string" ||
+    typeof item.arguments !== "string"
+  ) {
+    return null;
+  }
+
+  return {
+    id: item.id,
+    callId: item.call_id,
+    name: item.name,
+    arguments: item.arguments,
+  };
+}
+
+function normalizeRawFunctionCalls(
+  items: JsonRecord[],
+  tools: FunctionToolDefinition[],
+): ResponsesOutputItem[] {
+  if (tools.length === 0) {
+    return [];
+  }
+
+  return items
+    .map((item) => normalizeFunctionCallRecord(item, tools))
+    .filter((item): item is ResponsesOutputItem => item !== null);
+}
+
+function parseFunctionCallEnvelope(
+  text: string,
+  tools: FunctionToolDefinition[],
+): ResponsesOutputItem[] {
+  if (!text.trim() || tools.length === 0) {
+    return [];
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text.trim()) as unknown;
+  } catch {
+    return [];
+  }
+
+  const records = functionCallEnvelopeRecords(parsed);
+  return records
+    .map((record) => normalizeFunctionCallRecord(record, tools))
+    .filter((item): item is ResponsesOutputItem => item !== null);
+}
+
+function functionCallEnvelopeRecords(value: unknown): JsonRecord[] {
+  if (!isRecord(value)) {
+    return [];
+  }
+
+  if (value.type === "function_call") {
+    return [value];
+  }
+
+  if (
+    (value.type === "function_calls" || value.type === "tool_calls") &&
+    Array.isArray(value.calls)
+  ) {
+    return value.calls.filter(isRecord);
+  }
+
+  if (Array.isArray(value.tool_calls)) {
+    return value.tool_calls.filter(isRecord);
+  }
+
+  return [];
+}
+
+function normalizeFunctionCallRecord(
+  record: JsonRecord,
+  tools: FunctionToolDefinition[],
+): ResponsesOutputItem | null {
+  const name = typeof record.name === "string" ? record.name : null;
+  if (!name || !tools.some((tool) => tool.name === name)) {
+    return null;
+  }
+
+  const args = normalizeFunctionArguments(record.arguments);
+  if (args === null) {
+    return null;
+  }
+
+  return {
+    id: typeof record.id === "string" ? record.id : `fc_${randomUUID()}`,
+    type: "function_call",
+    call_id: typeof record.call_id === "string" ? record.call_id : `call_${randomUUID()}`,
+    name,
+    arguments: args,
+    status: "completed",
+  };
+}
+
+function normalizeFunctionArguments(value: unknown): string | null {
+  if (value === undefined || value === null) {
+    return "{}";
+  }
+
+  if (typeof value === "string") {
+    try {
+      JSON.parse(value);
+      return value;
+    } catch {
+      return null;
+    }
+  }
+
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return null;
+  }
+}
+
+function withToolContract(
+  input: CodexUserInput[],
+  tools: FunctionToolDefinition[],
+  options: { toolChoice: unknown; parallelToolCalls: unknown },
+): CodexUserInput[] {
+  if (tools.length === 0) {
+    return input;
+  }
+
+  return [textInput(toolContractText(tools, options)), ...input];
+}
+
+function toolContractText(
+  tools: FunctionToolDefinition[],
+  options: { toolChoice: unknown; parallelToolCalls: unknown },
+): string {
+  return [
+    "[openai_compat_tools]",
+    "Local function tools are available through the client. Do not invent tool results.",
+    "If a tool is needed, respond with only this JSON object and no Markdown:",
+    '{"type":"function_call","name":"tool_name","arguments":{}}',
+    "After a tool result is provided, answer normally or request another tool with the same JSON envelope.",
+    `tool_choice: ${JSON.stringify(options.toolChoice ?? "auto")}`,
+    `parallel_tool_calls: ${JSON.stringify(options.parallelToolCalls ?? false)}`,
+    `tools: ${JSON.stringify(
+      tools.map((tool) => ({
+        type: "function",
+        name: tool.name,
+        description: tool.description,
+        parameters: tool.parameters,
+        strict: tool.strict ?? false,
+      })),
+    )}`,
+  ].join("\n");
+}
+
+function writeFunctionCallSseEvents(
+  res: ServerResponse,
+  responseId: string,
+  functionCall: FunctionCallRecord,
+): void {
+  let sequenceNumber = 1;
+  const inProgressItem = {
+    id: functionCall.id,
+    type: "function_call",
+    call_id: functionCall.callId,
+    name: functionCall.name,
+    arguments: "",
+    status: "in_progress",
+  };
+  const completedItem = {
+    ...inProgressItem,
+    arguments: functionCall.arguments,
+    status: "completed",
+  };
+
+  writeSseEvent(res, "response.output_item.added", {
+    type: "response.output_item.added",
+    response_id: responseId,
+    output_index: 0,
+    item: inProgressItem,
+    sequence_number: sequenceNumber++,
+  });
+  writeSseEvent(res, "response.function_call_arguments.delta", {
+    type: "response.function_call_arguments.delta",
+    response_id: responseId,
+    item_id: functionCall.id,
+    output_index: 0,
+    call_id: functionCall.callId,
+    delta: functionCall.arguments,
+    sequence_number: sequenceNumber++,
+  });
+  writeSseEvent(res, "response.function_call_arguments.done", {
+    type: "response.function_call_arguments.done",
+    response_id: responseId,
+    item_id: functionCall.id,
+    output_index: 0,
+    call_id: functionCall.callId,
+    name: functionCall.name,
+    arguments: functionCall.arguments,
+    sequence_number: sequenceNumber++,
+  });
+  writeSseEvent(res, "response.output_item.done", {
+    type: "response.output_item.done",
+    response_id: responseId,
+    output_index: 0,
+    item: completedItem,
+    sequence_number: sequenceNumber,
+  });
 }
 
 function mapChatUsage(usage: TokenUsageBreakdown | null): JsonRecord {
@@ -952,7 +1454,7 @@ async function mapChatInput(
       }
 
       const role = typeof message.role === "string" ? message.role : "user";
-      if (!["system", "developer", "user", "assistant"].includes(role)) {
+      if (!["system", "developer", "user", "assistant", "tool"].includes(role)) {
         throw new OpenAICompatHttpError(
           400,
           `Unsupported chat message role: ${role}`,
@@ -960,6 +1462,21 @@ async function mapChatInput(
           `messages.${index}.role`,
         );
       }
+      if (role === "tool") {
+        input.push(
+          textInput(
+            `[tool_result]\ncall_id: ${String(message.tool_call_id ?? "")}\noutput:\n${chatContentText(
+              message.content,
+            )}`,
+          ),
+        );
+        return;
+      }
+
+      if (role === "assistant" && Array.isArray(message.tool_calls)) {
+        input.push(textInput(`[assistant_tool_calls]\n${JSON.stringify(message.tool_calls)}`));
+      }
+
       await appendRoleContent(input, role, message.content, tempFiles, `messages.${index}.content`);
     },
     Promise.resolve(),
@@ -975,6 +1492,7 @@ async function mapChatInput(
 async function mapResponsesInput(
   body: JsonRecord,
   tempFiles: ImageTempFiles,
+  previousState: ResponseContinuationState | null,
 ): Promise<CodexUserInput[]> {
   const input: CodexUserInput[] = [];
 
@@ -1002,7 +1520,15 @@ async function mapResponsesInput(
           );
         }
 
-        if (item.type === "input_text" || item.type === "output_text" || item.type === "text") {
+        if (item.type === "function_call_output") {
+          input.push(functionCallOutputInput(item, previousState));
+        } else if (item.type === "function_call") {
+          input.push(functionCallInput(item));
+        } else if (
+          item.type === "input_text" ||
+          item.type === "output_text" ||
+          item.type === "text"
+        ) {
           const text = typeof item.text === "string" ? item.text : "";
           input.push(textInput(`[user]\n${text}`));
         } else if (item.type === "input_image" || item.type === "image_url") {
@@ -1099,6 +1625,83 @@ async function appendRoleContent(
   if (!appended && !textBuffer) {
     input.push(textInput(`[${role}]`));
   }
+}
+
+function functionCallInput(item: JsonRecord): CodexUserInput {
+  return textInput(
+    [
+      "[assistant_tool_call]",
+      `call_id: ${String(item.call_id ?? "")}`,
+      `name: ${String(item.name ?? "")}`,
+      `arguments: ${typeof item.arguments === "string" ? item.arguments : JSON.stringify(item.arguments ?? {})}`,
+    ].join("\n"),
+  );
+}
+
+function functionCallOutputInput(
+  item: JsonRecord,
+  previousState: ResponseContinuationState | null,
+): CodexUserInput {
+  const callId = typeof item.call_id === "string" ? item.call_id : "";
+  const previousCall = callId ? previousState?.toolCalls.get(callId) : undefined;
+  const output = functionCallOutputText(item.output);
+  return textInput(
+    [
+      "[tool_result]",
+      `call_id: ${callId}`,
+      `name: ${previousCall?.name ?? String(item.name ?? item.function_name ?? "")}`,
+      "output:",
+      output,
+    ].join("\n"),
+  );
+}
+
+function functionCallOutputText(output: unknown): string {
+  if (typeof output === "string") {
+    return output;
+  }
+
+  if (Array.isArray(output)) {
+    return output
+      .map((item) => {
+        if (!isRecord(item)) {
+          return "";
+        }
+        if (
+          (item.type === "input_text" || item.type === "output_text" || item.type === "text") &&
+          typeof item.text === "string"
+        ) {
+          return item.text;
+        }
+        if (typeof item.image_url === "string") {
+          return `[image] ${item.image_url}`;
+        }
+        return JSON.stringify(item);
+      })
+      .filter(Boolean)
+      .join("\n");
+  }
+
+  return output === undefined ? "" : JSON.stringify(output);
+}
+
+function chatContentText(content: unknown): string {
+  if (typeof content === "string") {
+    return content;
+  }
+  if (Array.isArray(content)) {
+    return content
+      .map((part) =>
+        isRecord(part) && typeof part.text === "string"
+          ? part.text
+          : typeof part === "string"
+            ? part
+            : "",
+      )
+      .filter(Boolean)
+      .join("\n");
+  }
+  return content === undefined || content === null ? "" : String(content);
 }
 
 async function imageInputFromPart(
@@ -1198,12 +1801,205 @@ function mimeToExtension(mimeType: string): string {
   }
 }
 
+function parseResponsesFunctionTools(
+  body: JsonRecord,
+  previousTools: FunctionToolDefinition[],
+): FunctionToolDefinition[] {
+  if (!("tools" in body) || body.tools === undefined || body.tools === null) {
+    return previousTools;
+  }
+
+  if (!Array.isArray(body.tools)) {
+    throw new OpenAICompatHttpError(
+      400,
+      "tools must be an array",
+      "invalid_request_error",
+      "tools",
+    );
+  }
+
+  return body.tools.map((tool, index) => parseResponsesFunctionTool(tool, `tools.${index}`));
+}
+
+function parseResponsesFunctionTool(value: unknown, param: string): FunctionToolDefinition {
+  if (!isRecord(value)) {
+    throw new OpenAICompatHttpError(
+      400,
+      `${param} must be an object`,
+      "invalid_request_error",
+      param,
+    );
+  }
+
+  if (value.type !== "function") {
+    throw unsupportedFeature(
+      `Only local function tools are supported; received ${String(value.type ?? "unknown")}`,
+      `${param}.type`,
+    );
+  }
+
+  if (value.defer_loading === true || value.deferLoading === true) {
+    throw unsupportedFeature(
+      "Deferred function tools require tool search, which is not supported",
+      param,
+    );
+  }
+
+  return parseFunctionToolDefinition(value, param);
+}
+
+function parseChatFunctionTools(body: JsonRecord): FunctionToolDefinition[] {
+  const tools: FunctionToolDefinition[] = [];
+  if ("tools" in body && body.tools !== undefined && body.tools !== null) {
+    if (!Array.isArray(body.tools)) {
+      throw new OpenAICompatHttpError(
+        400,
+        "tools must be an array",
+        "invalid_request_error",
+        "tools",
+      );
+    }
+
+    for (const [index, tool] of body.tools.entries()) {
+      if (!isRecord(tool)) {
+        throw new OpenAICompatHttpError(
+          400,
+          `tools.${index} must be an object`,
+          "invalid_request_error",
+          `tools.${index}`,
+        );
+      }
+      if (tool.type !== "function") {
+        throw unsupportedFeature(
+          `Only local function tools are supported; received ${String(tool.type ?? "unknown")}`,
+          `tools.${index}.type`,
+        );
+      }
+      tools.push(parseFunctionToolDefinition(tool.function ?? tool, `tools.${index}`));
+    }
+  }
+
+  if ("functions" in body && body.functions !== undefined && body.functions !== null) {
+    if (!Array.isArray(body.functions)) {
+      throw new OpenAICompatHttpError(
+        400,
+        "functions must be an array",
+        "invalid_request_error",
+        "functions",
+      );
+    }
+    for (const [index, fn] of body.functions.entries()) {
+      tools.push(parseFunctionToolDefinition(fn, `functions.${index}`));
+    }
+  }
+
+  return tools;
+}
+
+function parseFunctionToolDefinition(value: unknown, param: string): FunctionToolDefinition {
+  if (!isRecord(value)) {
+    throw new OpenAICompatHttpError(
+      400,
+      `${param} must be an object`,
+      "invalid_request_error",
+      param,
+    );
+  }
+
+  if (typeof value.name !== "string" || !value.name) {
+    throw new OpenAICompatHttpError(
+      400,
+      `${param}.name must be a non-empty string`,
+      "invalid_request_error",
+      `${param}.name`,
+    );
+  }
+
+  return {
+    name: value.name,
+    description: typeof value.description === "string" ? value.description : "",
+    parameters: value.parameters ?? { type: "object", properties: {} },
+    ...(typeof value.strict === "boolean" ? { strict: value.strict } : {}),
+  };
+}
+
+function validateToolChoice(
+  toolChoice: unknown,
+  tools: FunctionToolDefinition[],
+  param: string,
+): void {
+  if (toolChoice === undefined || toolChoice === null) {
+    return;
+  }
+
+  if (typeof toolChoice === "string") {
+    if (["auto", "none", "required"].includes(toolChoice)) {
+      return;
+    }
+    if (tools.some((tool) => tool.name === toolChoice)) {
+      return;
+    }
+    throw unsupportedFeature(`Unsupported tool_choice: ${toolChoice}`, param);
+  }
+
+  if (isRecord(toolChoice)) {
+    if (toolChoice.type !== undefined && toolChoice.type !== "function") {
+      throw unsupportedFeature(`Unsupported tool_choice type: ${String(toolChoice.type)}`, param);
+    }
+    const name =
+      typeof toolChoice.name === "string"
+        ? toolChoice.name
+        : isRecord(toolChoice.function) && typeof toolChoice.function.name === "string"
+          ? toolChoice.function.name
+          : null;
+    if (name && tools.some((tool) => tool.name === name)) {
+      return;
+    }
+    throw unsupportedFeature("tool_choice function name is not available", param);
+  }
+
+  throw new OpenAICompatHttpError(
+    400,
+    "tool_choice must be a string or object",
+    "invalid_request_error",
+    param,
+  );
+}
+
+function resolvePreviousResponseState(
+  body: JsonRecord,
+  responseStates: ResponseStateStore,
+): ResponseContinuationState | null {
+  if (!("previous_response_id" in body) || body.previous_response_id === null) {
+    return null;
+  }
+
+  if (typeof body.previous_response_id !== "string" || !body.previous_response_id) {
+    throw new OpenAICompatHttpError(
+      400,
+      "previous_response_id must be a non-empty string",
+      "invalid_request_error",
+      "previous_response_id",
+    );
+  }
+
+  const state = responseStates.get(body.previous_response_id);
+  if (!state) {
+    throw new OpenAICompatHttpError(
+      404,
+      `No response found with id '${body.previous_response_id}'.`,
+      "invalid_request_error",
+      "previous_response_id",
+      "not_found",
+    );
+  }
+
+  return state;
+}
+
 function rejectUnsupportedCreateFields(body: JsonRecord, endpoint: "chat" | "responses"): void {
   if (typeof body.n === "number" && body.n > 1) {
     throw unsupportedFeature("n > 1 is not supported", "n");
-  }
-  if ("tools" in body || "tool_choice" in body || "functions" in body || "function_call" in body) {
-    throw unsupportedFeature("Tools and function calling are not supported", "tools");
   }
   if (body.logprobs === true || "top_logprobs" in body) {
     throw unsupportedFeature("Logprobs are not supported", "logprobs");
@@ -1212,14 +2008,11 @@ function rejectUnsupportedCreateFields(body: JsonRecord, endpoint: "chat" | "res
     throw unsupportedFeature("Audio inputs and outputs are not supported", "audio");
   }
   if (endpoint === "responses") {
-    if ("previous_response_id" in body && body.previous_response_id !== null) {
-      throw unsupportedFeature("previous_response_id is not supported", "previous_response_id");
-    }
     if (body.background === true) {
       throw unsupportedFeature("Background mode is not supported", "background");
     }
-    if (body.store === true) {
-      throw unsupportedFeature("Stored responses are not supported", "store");
+    if ("conversation" in body && body.conversation !== null && body.conversation !== undefined) {
+      throw unsupportedFeature("Responses conversation sessions are not supported", "conversation");
     }
   }
 }
@@ -1377,6 +2170,15 @@ function isAuthorized(req: IncomingMessage, token: string | undefined): boolean 
   }
 
   return req.headers.authorization === `Bearer ${token}`;
+}
+
+function isUnsupportedAgentsEndpoint(pathname: string): boolean {
+  return (
+    pathname.startsWith("/v1/traces") ||
+    pathname.startsWith("/v1/conversations") ||
+    pathname.startsWith("/v1/sessions") ||
+    pathname.startsWith("/v1/realtime")
+  );
 }
 
 function sendErrorFromUnknown(res: ServerResponse, error: unknown): void {
