@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "usetemi-codex-sdk"
-version = "0.130.0-8"
+version = "0.130.0-9"
 description = "Temi convenience SDK and low-level transport helpers for Codex."
 readme = "README.md"
 requires-python = ">=3.12"

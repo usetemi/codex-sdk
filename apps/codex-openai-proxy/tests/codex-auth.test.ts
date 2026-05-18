@@ -90,7 +90,7 @@ test("Codex auth manager reports login status timeout when Codex does not exit",
     [
       "#!/usr/bin/env node",
       "const args = process.argv.slice(2);",
-      "if (args[0] === 'login' && args[1] === 'status') {",
+      "if (args.join(' ') === 'login status') {",
       "  process.on('SIGTERM', () => {});",
       "  setInterval(() => {}, 1000);",
       "}",

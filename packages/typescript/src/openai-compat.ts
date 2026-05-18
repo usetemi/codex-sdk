@@ -270,7 +270,7 @@ class AppServerConnection {
           clientInfo: {
             name: "usetemi-codex-sdk",
             title: "Temi Codex SDK OpenAI Compatibility",
-            version: "0.130.0-8",
+            version: "0.130.0-9",
           },
           capabilities: {
             experimentalApi: true,
