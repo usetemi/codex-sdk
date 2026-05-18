@@ -9,12 +9,12 @@ Add `:usetemi_codex_sdk` to `mix.exs`:
 ```elixir
 def deps do
   [
-    {:usetemi_codex_sdk, "0.130.0-9"}
+    {:usetemi_codex_sdk, "0.130.0-10"}
   ]
 end
 ```
 
-Package versions track the stable Codex version they target. Version `0.130.0-9` targets Codex `0.130.0`.
+Package versions track the stable Codex version they target. Version `0.130.0-10` targets Codex `0.130.0`.
 
 ## Usage
 
