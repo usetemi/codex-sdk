@@ -54,7 +54,7 @@ wheels = [
 
 [[package]]
 name = "usetemi-codex-sdk"
-version = "0.130.0-10"
+version = "0.131.0"
 source = { editable = "." }
 
 [package.dev-dependencies]
