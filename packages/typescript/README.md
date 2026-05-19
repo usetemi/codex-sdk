@@ -5,10 +5,10 @@ TypeScript wrapper around upstream `@openai/codex-sdk`, plus low-level transport
 ## Install
 
 ```bash
-npm install @usetemi/codex-sdk@0.130.0-10
+npm install @usetemi/codex-sdk@0.130.0-11
 ```
 
-Package versions track the stable Codex version they target. Version `0.130.0-10` targets Codex `0.130.0`.
+Package versions track the stable Codex version they target. Version `0.130.0-11` targets Codex `0.130.0`.
 
 ## Usage
 

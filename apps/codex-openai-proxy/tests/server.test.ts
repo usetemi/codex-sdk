@@ -50,6 +50,22 @@ test("GET /readyz returns non-200 when Codex initialization fails", async (t) =>
   assert.equal(fake.requests[0]?.method, "initialize");
 });
 
+test("GET / is public landing page with primary links", async (t) => {
+  const fake = new FakeAppServer();
+  const config = parseCliConfig(["--api-key", "good-token"], {});
+  const baseUrl = await startProxyFixture(t, fake, config);
+
+  const response = await fetch(`${baseUrl}/`);
+  assert.equal(response.status, 200);
+  assert.match(response.headers.get("content-type") ?? "", /text\/html/);
+  const body = await response.text();
+  assert.match(body, /<title>Codex OpenAI Proxy<\/title>/);
+  assert.match(body, /href="\/auth"/);
+  assert.match(body, /href="\/AGENTS\.md"/);
+  assert.equal(body.match(/<a\b/g)?.length, 2);
+  assert.deepEqual(fake.requests, []);
+});
+
 test("OpenAI-compatible routes work through the proxy wrapper", async (t) => {
   const fake = new FakeAppServer();
   fake.modelPages = [{ data: [{ id: "codex-mini" }], nextCursor: null }];
@@ -157,15 +173,33 @@ test("explicit disabled auth permits unauthenticated non-loopback configuration"
   assert.equal(response.status, 200);
 });
 
-test("GET /auth.md is public markdown guidance", async (t) => {
+test("GET /AGENTS.md is public markdown guidance", async (t) => {
+  const fake = new FakeAppServer();
+  const config = parseCliConfig(["--api-key", "good-token"], {});
+  const baseUrl = await startProxyFixture(t, fake, config);
+
+  const response = await fetch(`${baseUrl}/AGENTS.md`);
+  assert.equal(response.status, 200);
+  assert.match(response.headers.get("content-type") ?? "", /text\/markdown/);
+  const body = await response.text();
+  assert.match(body, /# Codex OpenAI Proxy Agents Guide/);
+  assert.match(body, /\/auth/);
+  assert.match(body, /\/healthz/);
+  assert.match(body, /\/readyz/);
+  assert.match(body, /\/v1/);
+  assert.match(body, /Authorization: Bearer/);
+  assert.deepEqual(fake.requests, []);
+});
+
+test("GET /auth.md is not served", async (t) => {
   const fake = new FakeAppServer();
   const config = parseCliConfig(["--api-key", "good-token"], {});
   const baseUrl = await startProxyFixture(t, fake, config);
 
   const response = await fetch(`${baseUrl}/auth.md`);
-  assert.equal(response.status, 200);
-  assert.match(response.headers.get("content-type") ?? "", /text\/markdown/);
-  assert.match(await response.text(), /auth\/device/);
+  assert.equal(response.status, 404);
+  assert.equal(assertRecord(assertRecord(await response.json()).error).code, "not_found");
+  assert.deepEqual(fake.requests, []);
 });
 
 test("GET /auth is public operator UI", async (t) => {
@@ -179,6 +213,9 @@ test("GET /auth is public operator UI", async (t) => {
   const body = await response.text();
   assert.match(body, /sessionStorage/);
   assert.match(body, /auth\/restart/);
+  assert.match(body, /href="\/AGENTS\.md"/);
+  assert.match(body, /Agents Guide/);
+  assert.doesNotMatch(body, /API guide/);
   assert.match(body, /href="data:,"/);
   assert.match(body, /grid-template-columns: 1fr/);
   assert.match(body, /id="copy-code"/);

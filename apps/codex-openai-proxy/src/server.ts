@@ -99,6 +99,11 @@ async function handleProxyRequest(
   try {
     const url = new URL(req.url ?? "/", "http://localhost");
 
+    if (req.method === "GET" && url.pathname === "/") {
+      sendHtml(res, 200, landingHtml());
+      return;
+    }
+
     if (req.method === "GET" && url.pathname === "/healthz") {
       sendJson(res, 200, {
         status: "ok",
@@ -119,8 +124,8 @@ async function handleProxyRequest(
       return;
     }
 
-    if (req.method === "GET" && url.pathname === "/auth.md") {
-      sendMarkdown(res, 200, authGuideMarkdown());
+    if (req.method === "GET" && url.pathname === "/AGENTS.md") {
+      sendMarkdown(res, 200, agentsGuideMarkdown());
       return;
     }
 
@@ -480,6 +485,118 @@ function readRequestBody(req: IncomingMessage): Promise<string> {
   });
 }
 
+function landingHtml(): string {
+  return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Codex OpenAI Proxy</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #f7f8fa;
+        --text: #1d2430;
+        --muted: #5e6a78;
+        --line: #d9dee7;
+        --accent: #2563eb;
+        --accent-contrast: #ffffff;
+      }
+
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #101418;
+          --text: #e6eaf0;
+          --muted: #9aa5b1;
+          --line: #2b333d;
+          --accent: #6ea8fe;
+          --accent-contrast: #0f172a;
+        }
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        min-height: 100vh;
+        margin: 0;
+        display: grid;
+        place-items: center;
+        background: var(--bg);
+        color: var(--text);
+        font-family:
+          ui-sans-serif,
+          system-ui,
+          -apple-system,
+          BlinkMacSystemFont,
+          "Segoe UI",
+          sans-serif;
+        line-height: 1.45;
+      }
+
+      main {
+        width: min(100% - 32px, 560px);
+      }
+
+      h1 {
+        margin: 0;
+        font-size: 44px;
+        line-height: 1;
+      }
+
+      p {
+        margin: 14px 0 0;
+        color: var(--muted);
+        font-size: 17px;
+      }
+
+      nav {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        margin-top: 28px;
+      }
+
+      a {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 42px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 9px 14px;
+        color: var(--text);
+        font-weight: 650;
+        text-decoration: none;
+      }
+
+      a.primary {
+        border-color: var(--accent);
+        background: var(--accent);
+        color: var(--accent-contrast);
+      }
+
+      @media (max-width: 640px) {
+        h1 {
+          font-size: 32px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Codex OpenAI Proxy</h1>
+      <p>OpenAI-compatible access to a managed Codex app-server.</p>
+      <nav aria-label="Primary">
+        <a class="primary" href="/auth">Auth</a>
+        <a class="primary" href="/AGENTS.md">AGENTS.md</a>
+      </nav>
+    </main>
+  </body>
+</html>`;
+}
+
 function authOperatorHtml(): string {
   return `<!doctype html>
 <html lang="en">
@@ -779,7 +896,7 @@ function authOperatorHtml(): string {
           <h1>Codex Proxy Auth</h1>
           <p>Service-wide Codex credentials for this OpenAI-compatible proxy.</p>
         </div>
-        <a href="/auth.md">API guide</a>
+        <a href="/AGENTS.md">Agents Guide</a>
       </header>
 
       <section class="panel span-2" aria-labelledby="token-heading">
@@ -1136,17 +1253,29 @@ function authOperatorHtml(): string {
 </html>`;
 }
 
-function authGuideMarkdown(): string {
+function agentsGuideMarkdown(): string {
   return [
-    "# Codex OpenAI Proxy Auth",
+    "# Codex OpenAI Proxy Agents Guide",
     "",
-    "This proxy uses one service-wide Codex identity for all `/v1` requests. Client API keys authenticate callers to the proxy only; they are not forwarded to Codex.",
+    "This service exposes Codex through an OpenAI-compatible `/v1` HTTP API. It uses one managed, service-wide Codex login for all upstream Codex requests.",
     "",
-    "Open `/auth` in a browser for the bundled operator UI.",
+    "## Browser Auth",
     "",
-    "Changing Codex credentials restarts the underlying Codex app-server connection. Active `/v1` requests can fail during that restart.",
+    "Open `/auth` for the operator UI. The UI can check the managed Codex login, start device auth, restart the Codex app-server, and import trusted Codex auth JSON.",
     "",
-    "## Check Status",
+    "## Bearer Tokens",
+    "",
+    "Client API keys authenticate callers to this proxy only. Send them as `Authorization: Bearer <proxy-token>` on `/auth/*` management requests and `/v1/*` OpenAI-compatible requests. Proxy tokens are not forwarded to Codex.",
+    "",
+    "Public pages are limited to `/`, `/auth`, `/AGENTS.md`, `/healthz`, and `/readyz`.",
+    "",
+    "## Health And Readiness",
+    "",
+    "`GET /healthz` reports that the proxy process is running without initializing Codex. `GET /readyz` initializes the Codex app-server connection and reports whether it is ready.",
+    "",
+    "## Managed Codex Login",
+    "",
+    "Managed login stores Codex credentials under the proxy data directory. Changing credentials restarts the underlying Codex app-server connection, so active `/v1` requests can fail during that restart.",
     "",
     "```bash",
     'curl -H "Authorization: Bearer $CODEX_OPENAI_PROXY_API_KEY" \\',
@@ -1169,7 +1298,20 @@ function authGuideMarkdown(): string {
     "  https://proxy.example.com/auth/restart",
     "```",
     "",
-    "## Import Local Codex Auth JSON",
+    "## OpenAI-Compatible Use",
+    "",
+    "Point OpenAI clients at `https://proxy.example.com/v1` and use a proxy bearer token as the API key. Supported routes include `GET /v1/models`, `POST /v1/chat/completions`, and `POST /v1/responses`.",
+    "",
+    "## Operator Expectations",
+    "",
+    "Keep proxy bearer tokens private, import only trusted Codex auth JSON, and avoid credential changes while long-running `/v1` requests are active.",
+    "",
+    "```bash",
+    'curl -H "Authorization: Bearer $CODEX_OPENAI_PROXY_API_KEY" \\',
+    "  https://proxy.example.com/v1/models",
+    "```",
+    "",
+    "## Trusted Auth Import",
     "",
     "```bash",
     'curl -X POST -H "Authorization: Bearer $CODEX_OPENAI_PROXY_API_KEY" \\',
