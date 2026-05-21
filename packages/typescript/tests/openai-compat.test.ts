@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { type Server } from "node:http";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 
+import { createOpenAICompatServer } from "../src/openai-compat";
 import {
   FakeAppServer,
   startImageServer,
@@ -195,6 +200,157 @@ test("POST /v1/responses accepts Agents SDK default no-tool fields", async (t) =
 
   assert.equal(response.status, 200);
   assert.equal(assertRecord(await response.json()).output_text, "no tools");
+});
+
+test("POST /v1/responses recreates app-server after subprocess exit", async (t) => {
+  const tempDir = await mkdtemp(join(tmpdir(), "codex-openai-compat-restart-"));
+  t.after(async () => {
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  const markerPath = join(tempDir, "first-turn-exited");
+  const scriptPath = join(tempDir, "fake-app-server.cjs");
+  await writeFile(
+    scriptPath,
+    `
+const fs = require("node:fs");
+const readline = require("node:readline");
+
+const markerPath = process.env.CODEX_FAKE_MARKER;
+const lineReader = readline.createInterface({ input: process.stdin });
+
+function send(message) {
+  process.stdout.write(JSON.stringify(message) + "\\n");
+}
+
+function tokenUsage() {
+  return {
+    totalTokens: 2,
+    inputTokens: 1,
+    cachedInputTokens: 0,
+    outputTokens: 1,
+    reasoningOutputTokens: 0,
+  };
+}
+
+lineReader.on("line", (line) => {
+  const message = JSON.parse(line);
+  const requestId = message.id;
+
+  if (message.method === "initialize") {
+    send({
+      id: requestId,
+      result: {
+        userAgent: "fake-codex",
+        codexHome: "/tmp/fake-codex-home",
+        platformFamily: "unix",
+        platformOs: "linux",
+      },
+    });
+    return;
+  }
+
+  if (message.method === "thread/start") {
+    send({
+      id: requestId,
+      result: {
+        thread: { id: "thread-1", ephemeral: true },
+        model: "codex-mini",
+      },
+    });
+    return;
+  }
+
+  if (message.method === "turn/start") {
+    if (!fs.existsSync(markerPath)) {
+      fs.writeFileSync(markerPath, "1");
+      process.exit(0);
+    }
+
+    const threadId = message.params.threadId;
+    const turnId = "turn-1";
+    const item = {
+      type: "agentMessage",
+      id: "item-1",
+      text: "recovered",
+      phase: null,
+      memoryCitation: null,
+    };
+    send({
+      id: requestId,
+      result: { turn: { id: turnId, status: "inProgress", items: [], error: null } },
+    });
+    send({
+      method: "turn/started",
+      params: { threadId, turn: { id: turnId, status: "inProgress", items: [], error: null } },
+    });
+    send({
+      method: "thread/tokenUsage/updated",
+      params: {
+        threadId,
+        turnId,
+        tokenUsage: { total: tokenUsage(), last: tokenUsage(), modelContextWindow: null },
+      },
+    });
+    send({
+      method: "item/completed",
+      params: { threadId, turnId, item, completedAtMs: Date.now() },
+    });
+    send({
+      method: "turn/completed",
+      params: {
+        threadId,
+        turn: { id: turnId, status: "completed", items: [item], error: null },
+      },
+    });
+    return;
+  }
+
+  send({
+    id: requestId,
+    error: { code: -32000, message: "unexpected method " + message.method },
+  });
+});
+`,
+  );
+
+  const server = createOpenAICompatServer({
+    appServer: {
+      command: process.execPath,
+      args: [scriptPath],
+      env: { ...process.env, CODEX_FAKE_MARKER: markerPath },
+    },
+  });
+  await listenServer(server);
+  t.after(async () => {
+    await closeServer(server);
+  });
+
+  const address = server.address();
+  assert.equal(typeof address, "object");
+  assert.notEqual(address, null);
+  const baseUrl = `http://127.0.0.1:${address.port}`;
+  const requestBody = {
+    model: "codex-mini",
+    input: "hello",
+    store: false,
+  };
+
+  const failedResponse = await fetch(`${baseUrl}/v1/responses`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(requestBody),
+  });
+  assert.equal(failedResponse.status, 500);
+  assert.match(JSON.stringify(await failedResponse.json()), /app-server closed/);
+
+  const recoveredResponse = await fetch(`${baseUrl}/v1/responses`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(requestBody),
+  });
+  assert.equal(recoveredResponse.status, 200);
+  assert.equal(assertRecord(await recoveredResponse.json()).output_text, "recovered");
 });
 
 test("POST /v1/responses returns function_call items for local function tools", async (t) => {
@@ -555,4 +711,26 @@ function assertRecord(value: unknown): Record<string, unknown> {
 function assertArray(value: unknown): unknown[] {
   assert.equal(Array.isArray(value), true);
   return value as unknown[];
+}
+
+function listenServer(server: Server): Promise<void> {
+  return new Promise((resolve) => {
+    server.listen(0, "127.0.0.1", resolve);
+  });
+}
+
+function closeServer(server: Server): Promise<void> {
+  if (!server.listening) {
+    return Promise.resolve();
+  }
+
+  return new Promise((resolve, reject) => {
+    server.close((error) => {
+      if (error) {
+        reject(error);
+      } else {
+        resolve();
+      }
+    });
+  });
 }

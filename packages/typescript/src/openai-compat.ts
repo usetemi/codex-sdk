@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 
 import {
+  AppServerClosedError,
   AppServerClient,
   JsonRpcResponseError,
   type AppServerClientOptions,
@@ -250,8 +251,15 @@ class AppServerConnection {
   }
 
   async request(method: string, params?: unknown): Promise<unknown> {
-    await this.ensureInitialized();
-    return (await this.#client()).request(method, params);
+    try {
+      await this.ensureInitialized();
+      return await (await this.#client()).request(method, params);
+    } catch (error) {
+      if (error instanceof AppServerClosedError) {
+        await this.#discardClient();
+      }
+      throw error;
+    }
   }
 
   subscribe(callback: (event: AppServerEvent) => void): () => void {
@@ -279,7 +287,14 @@ class AppServerConnection {
       })();
     }
 
-    await this.#initializePromise;
+    try {
+      await this.#initializePromise;
+    } catch (error) {
+      if (error instanceof AppServerClosedError) {
+        await this.#discardClient();
+      }
+      throw error;
+    }
   }
 
   async close(): Promise<void> {
@@ -311,6 +326,10 @@ class AppServerConnection {
     void (async () => {
       try {
         for await (const event of events()) {
+          if (event.type === "exit") {
+            void this.#discardClient();
+          }
+
           if (event.type === "serverRequest") {
             await this.#respondToServerRequest(client, event);
           }
@@ -323,6 +342,24 @@ class AppServerConnection {
         // Request paths surface app-server failures through request promises.
       }
     })();
+  }
+
+  async #discardClient(): Promise<void> {
+    const clientPromise = this.#clientPromise;
+    this.#clientPromise = null;
+    this.#initializePromise = null;
+    this.#pumpStarted = false;
+
+    if (!clientPromise) {
+      return;
+    }
+
+    try {
+      const client = await clientPromise;
+      await client.close?.();
+    } catch {
+      // The app-server is already gone; the next request will create a fresh one.
+    }
   }
 
   async #respondToServerRequest(
