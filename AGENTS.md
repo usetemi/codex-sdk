@@ -39,5 +39,7 @@ npm run check
 
 - Package versions usually track the target Codex version exactly. For a same-Codex repair release, use a prerelease suffix such as `0.130.0-1` across all package manifests so `scripts/release_versions.py --expect <version>` passes.
 - npm rejects prerelease publishes unless a dist-tag is provided. The release workflow handles this by publishing prerelease versions with `--tag "${NPM_TAG:-next}"`; expect `latest` to remain on the stable version.
+- PyPI publishing for `usetemi-codex-sdk` is still pending organization approval/trusted-publisher setup.
+- Skip npm publishing for `@usetemi/codex-openai-proxy`; use the GHCR image for proxy distribution.
 - If an all-package release partially fails after npm artifact build, rerun `.github/workflows/release.yml` manually with `publish_target=npm` and the same version to publish only npm without retrying PyPI, Hex, or Go.
 - Protected release environments may need approval before publish jobs run. Check pending deployments with `gh api repos/usetemi/codex-sdk/actions/runs/<run_id>/pending_deployments`.
