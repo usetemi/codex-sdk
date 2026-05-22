@@ -18,10 +18,15 @@ except ModuleNotFoundError:
 STABLE_VERSION = re.compile(r"^\d+\.\d+\.\d+$")
 ELIXIR_VERSION = re.compile(r'(version:\s*")([^"]+)(")')
 GO_VERSION = re.compile(r'(const\s+Version\s*=\s*")([^"]+)(")')
+GO_TARGET_CODEX_VERSION = re.compile(r'(const\s+TargetCodexVersion\s*=\s*")([^"]+)(")')
 PYPROJECT_VERSION = re.compile(r'(^version\s*=\s*")([^"]+)(")', re.MULTILINE)
+TYPESCRIPT_COMPAT_CLIENT_VERSION = re.compile(
+    r'(title:\s*"Temi Codex SDK OpenAI Compatibility",\s*version:\s*")([^"]+)(")'
+)
 UV_LOCK_PROJECT_VERSION = re.compile(
     r'(\[\[package\]\]\nname = "usetemi-codex-sdk"\nversion = ")([^"]+)(")'
 )
+PYTHON_README_INSTALL_VERSION = re.compile(r"(pip install usetemi-codex-sdk==)(\S+)")
 TARGET_CODEX_SENTENCE = re.compile(r"Version `[^`]+` targets Codex `\d+\.\d+\.\d+`")
 
 README_FILES = [
@@ -63,6 +68,7 @@ def bump(root: Path, version: str, *, update_locks: bool = True) -> None:
     current_package_version = current_versions["typescript"]
 
     update_typescript_package(root, version)
+    update_typescript_compat_client_version(root, version)
     update_proxy_package(root, version)
     update_python_project(root, version)
     update_elixir_mix(root, version)
@@ -82,6 +88,17 @@ def update_typescript_package(root: Path, version: str) -> None:
     package["dependencies"]["@openai/codex"] = version
     package["dependencies"]["@openai/codex-sdk"] = f"^{version}"
     package_json.write_text(json.dumps(package, indent=2) + "\n")
+
+
+def update_typescript_compat_client_version(root: Path, version: str) -> None:
+    openai_compat = root / "packages" / "typescript" / "src" / "openai-compat.ts"
+    openai_compat.write_text(
+        replace_once(
+            TYPESCRIPT_COMPAT_CLIENT_VERSION,
+            openai_compat.read_text(),
+            rf"\g<1>{version}\3",
+        )
+    )
 
 
 def update_proxy_package(root: Path, version: str) -> None:
@@ -109,9 +126,10 @@ def update_elixir_mix(root: Path, version: str) -> None:
 
 def update_go_version(root: Path, version: str) -> None:
     version_go = root / "packages" / "go" / "version.go"
-    version_go.write_text(
-        replace_once(GO_VERSION, version_go.read_text(), rf"\g<1>{version}\3")
-    )
+    text = version_go.read_text()
+    text = replace_once(GO_VERSION, text, rf"\g<1>{version}\3")
+    text = replace_once(GO_TARGET_CODEX_VERSION, text, rf"\g<1>{version}\3")
+    version_go.write_text(text)
 
 
 def update_readmes(root: Path, current_package_version: str, version: str) -> None:
@@ -119,6 +137,7 @@ def update_readmes(root: Path, current_package_version: str, version: str) -> No
         path = root / readme
         text = path.read_text()
         text = text.replace(current_package_version, version)
+        text = PYTHON_README_INSTALL_VERSION.sub(rf"\g<1>{version}", text)
         text = TARGET_CODEX_SENTENCE.sub(
             f"Version `{version}` targets Codex `{version}`", text
         )

@@ -43,7 +43,7 @@ npx @usetemi/codex-openai-proxy@0.133.0 --api-key local-proxy-token
 Python SDK:
 
 ```bash
-pip install usetemi-codex-sdk==0.130.0.post11
+pip install usetemi-codex-sdk==0.133.0
 ```
 
 Elixir SDK:

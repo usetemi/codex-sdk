@@ -4,4 +4,4 @@ package codexsdk
 const Version = "0.133.0"
 
 // TargetCodexVersion is the Codex CLI version this package targets.
-const TargetCodexVersion = "0.130.0"
+const TargetCodexVersion = "0.133.0"
