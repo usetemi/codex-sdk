@@ -87,10 +87,8 @@ jobs:
           cache: npm
       - run: npm install
       - run: npm --workspace @usetemi/codex-sdk run build
-      - run: npm --workspace @usetemi/codex-openai-proxy run build
       - run: mkdir -p dist/npm
       - run: npm pack --workspace @usetemi/codex-sdk --pack-destination dist/npm
-      - run: npm pack --workspace @usetemi/codex-openai-proxy --pack-destination dist/npm
       - uses: actions/upload-artifact@v4
         with:
           name: npm-package
@@ -121,7 +119,7 @@ jobs:
           registry-url: https://registry.npmjs.org
       - name: Publish npm package
         run: |
-          for package in dist/npm/usetemi-codex-sdk-*.tgz dist/npm/usetemi-codex-openai-proxy-*.tgz; do
+          for package in dist/npm/usetemi-codex-sdk-*.tgz; do
             metadata=$(tar -xOf "${package}" package/package.json)
             name=$(node -e 'const fs = require("node:fs"); console.log(JSON.parse(fs.readFileSync(0, "utf8")).name);' <<<"${metadata}")
             version=$(node -e 'const fs = require("node:fs"); console.log(JSON.parse(fs.readFileSync(0, "utf8")).version);' <<<"${metadata}")
