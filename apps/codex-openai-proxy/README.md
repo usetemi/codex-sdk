@@ -2,12 +2,12 @@
 
 OpenAI-compatible HTTP proxy for Codex app-server. Run the proxy, point standard OpenAI clients at `/v1`, and the proxy translates supported requests to Codex turns.
 
-Version `0.130.0-11` targets Codex `0.130.0`.
+Version `0.133.0` targets Codex `0.133.0`.
 
 ## Run
 
 ```bash
-npx @usetemi/codex-openai-proxy@0.130.0-11 --api-key local-proxy-token
+npx @usetemi/codex-openai-proxy@0.133.0 --api-key local-proxy-token
 ```
 
 Use the proxy with normal OpenAI clients:
@@ -110,7 +110,7 @@ Managed web re-auth with persisted proxy data:
 docker run --rm -p 8080:8080 \
   -e CODEX_OPENAI_PROXY_API_KEYS=proxy-token \
   -v codex-openai-proxy-data:/data \
-  ghcr.io/usetemi/codex-openai-proxy:0.130.0-11
+  ghcr.io/usetemi/codex-openai-proxy:0.133.0
 ```
 
 Then visit `http://127.0.0.1:8080/auth` or call `/auth/device` from your web app.
@@ -122,7 +122,7 @@ docker run --rm -p 8080:8080 \
   -e CODEX_OPENAI_PROXY_API_KEYS=proxy-token \
   -e CODEX_HOME=/codex-home \
   -v codex-home:/codex-home \
-  ghcr.io/usetemi/codex-openai-proxy:0.130.0-11
+  ghcr.io/usetemi/codex-openai-proxy:0.133.0
 ```
 
 API-key mode:
@@ -131,7 +131,7 @@ API-key mode:
 docker run --rm -p 8080:8080 \
   -e CODEX_OPENAI_PROXY_API_KEYS=proxy-token \
   -e CODEX_API_KEY="$CODEX_API_KEY" \
-  ghcr.io/usetemi/codex-openai-proxy:0.130.0-11
+  ghcr.io/usetemi/codex-openai-proxy:0.133.0
 ```
 
 ## Endpoints

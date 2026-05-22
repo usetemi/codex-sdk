@@ -5,10 +5,10 @@ Go module for Temi convenience SDK and low-level transport helpers for Codex.
 ## Install
 
 ```bash
-go get github.com/usetemi/codex-sdk/packages/go@v0.130.0-11
+go get github.com/usetemi/codex-sdk/packages/go@v0.133.0
 ```
 
-Package versions track the stable Codex version they target. Version `0.130.0-11` targets Codex `0.130.0`.
+Package versions track the stable Codex version they target. Version `0.133.0` targets Codex `0.133.0`.
 
 ## Usage
 

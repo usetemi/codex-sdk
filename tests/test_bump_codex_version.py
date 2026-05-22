@@ -34,6 +34,11 @@ class BumpCodexVersionTest(unittest.TestCase):
             self.assertEqual(package["dependencies"]["@openai/codex"], "1.2.4")
             self.assertEqual(package["dependencies"]["@openai/codex-sdk"], "^1.2.4")
 
+            openai_compat = (
+                root / "packages/typescript/src/openai-compat.ts"
+            ).read_text()
+            self.assertIn('version: "1.2.4"', openai_compat)
+
             proxy_package = json.loads(
                 (root / "apps/codex-openai-proxy/package.json").read_text()
             )
@@ -45,12 +50,20 @@ class BumpCodexVersionTest(unittest.TestCase):
 
             root_readme = (root / "README.md").read_text()
             self.assertIn("@usetemi/codex-sdk@1.2.4", root_readme)
+            self.assertIn("pip install usetemi-codex-sdk==1.2.4", root_readme)
             self.assertIn('{:usetemi_codex_sdk, "1.2.4"}', root_readme)
             self.assertIn("packages/go@v1.2.4", root_readme)
+
+            python_readme = (root / "packages/python/README.md").read_text()
+            self.assertIn("pip install usetemi-codex-sdk==1.2.4", python_readme)
 
             package_readme = (root / "packages/typescript/README.md").read_text()
             self.assertIn("Version `1.2.4` targets Codex `1.2.4`.", package_readme)
             self.assertIn('version: "0.1.0"', package_readme)
+
+            go_version = (root / "packages/go/version.go").read_text()
+            self.assertIn('const Version = "1.2.4"', go_version)
+            self.assertIn('const TargetCodexVersion = "1.2.4"', go_version)
 
             uv_lock = (root / "packages/python/uv.lock").read_text()
             self.assertIn('name = "usetemi-codex-sdk"\nversion = "1.2.4"', uv_lock)
@@ -59,6 +72,7 @@ class BumpCodexVersionTest(unittest.TestCase):
         for path in [
             "apps/codex-openai-proxy",
             "packages/typescript",
+            "packages/typescript/src",
             "packages/python",
             "packages/elixir",
             "packages/go",
@@ -78,6 +92,17 @@ class BumpCodexVersionTest(unittest.TestCase):
                 indent=2,
             )
             + "\n"
+        )
+        (root / "packages/typescript/src/openai-compat.ts").write_text(
+            """
+await client.request("initialize", {
+  clientInfo: {
+    name: "usetemi-codex-sdk",
+    title: "Temi Codex SDK OpenAI Compatibility",
+    version: "1.2.3-1",
+  },
+});
+"""
         )
         (root / "apps/codex-openai-proxy/package.json").write_text(
             json.dumps(
@@ -99,6 +124,7 @@ class BumpCodexVersionTest(unittest.TestCase):
         (root / "packages/elixir/mix.exs").write_text('version: "1.2.3-1",\n')
         (root / "packages/go/version.go").write_text(
             'package codexsdk\n\nconst Version = "1.2.3-1"\n'
+            'const TargetCodexVersion = "1.2.3"\n'
         )
         (root / "packages/python/uv.lock").write_text(
             'version = 1\n\n[[package]]\nname = "usetemi-codex-sdk"\nversion = "1.2.3-1"\n'
@@ -109,6 +135,7 @@ class BumpCodexVersionTest(unittest.TestCase):
 
 ```bash
 npm install @usetemi/codex-sdk@1.2.3-1
+pip install usetemi-codex-sdk==1.2.3.post1
 # Elixir: add {:usetemi_codex_sdk, "1.2.3-1"} to mix.exs, then:
 go get github.com/usetemi/codex-sdk/packages/go@v1.2.3-1
 ```
@@ -119,6 +146,10 @@ go get github.com/usetemi/codex-sdk/packages/go@v1.2.3-1
 
         package_readme = """
 Package versions track the stable Codex version they target. Version `1.2.3-1` targets Codex `1.2.3`.
+
+```bash
+pip install usetemi-codex-sdk==1.2.3.post1
+```
 
 ```ts
 version: "0.1.0",
