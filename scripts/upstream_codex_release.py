@@ -129,7 +129,7 @@ def decide_release(
             reason=f"{CODEX_SDK_NPM_PACKAGE}@{version} is not published",
         )
 
-    if current_package_version == version or current_codex_version == version:
+    if stable_version_at_least(current_codex_version, version):
         return ReleaseDecision(
             should_update=False,
             version=version,
@@ -137,30 +137,14 @@ def decide_release(
             current_package_version=current_package_version,
             current_codex_version=current_codex_version,
             branch=branch,
-            reason=f"repository already targets Codex {version}",
+            reason=f"repository already targets Codex {current_codex_version}",
         )
 
+    reason = f"new stable Codex version {version} is available"
     if branch_exists:
-        return ReleaseDecision(
-            should_update=False,
-            version=version,
-            codex_sdk_version=codex_sdk_version,
-            current_package_version=current_package_version,
-            current_codex_version=current_codex_version,
-            branch=branch,
-            reason=f"branch {branch} already exists",
-        )
-
-    if pr_exists:
-        return ReleaseDecision(
-            should_update=False,
-            version=version,
-            codex_sdk_version=codex_sdk_version,
-            current_package_version=current_package_version,
-            current_codex_version=current_codex_version,
-            branch=branch,
-            reason=f"open PR already exists for {branch}",
-        )
+        reason = f"branch {branch} already exists; update and revalidate it"
+    elif pr_exists:
+        reason = f"open PR already exists for {branch}; update and revalidate it"
 
     return ReleaseDecision(
         should_update=True,
@@ -169,7 +153,7 @@ def decide_release(
         current_package_version=current_package_version,
         current_codex_version=current_codex_version,
         branch=branch,
-        reason=f"new stable Codex version {version} is available",
+        reason=reason,
     )
 
 
@@ -269,6 +253,12 @@ def normalize_version(version: str) -> str:
         raise ValueError(f"Expected a stable three-part version, got {version!r}")
 
     return normalized
+
+
+def stable_version_at_least(current: str, target: str) -> bool:
+    return bool(STABLE_VERSION.fullmatch(current)) and version_key(
+        current
+    ) >= version_key(target)
 
 
 def version_key(version: str) -> tuple[int, int, int]:

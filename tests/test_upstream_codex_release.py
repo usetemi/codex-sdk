@@ -46,7 +46,21 @@ class UpstreamCodexReleaseTest(unittest.TestCase):
         self.assertFalse(decision.should_update)
         self.assertIn("already targets", decision.reason)
 
-    def test_skips_when_automation_branch_exists(self) -> None:
+    def test_skips_when_repo_already_targets_newer_version(self) -> None:
+        decision = decide_release(
+            version="1.2.4",
+            codex_sdk_version="1.2.4",
+            current_package_version="1.2.5",
+            current_codex_version="1.2.5",
+            branch="automation/codex-v1.2.4",
+            branch_exists=False,
+            pr_exists=False,
+        )
+
+        self.assertFalse(decision.should_update)
+        self.assertIn("already targets Codex 1.2.5", decision.reason)
+
+    def test_updates_when_automation_branch_exists(self) -> None:
         decision = decide_release(
             version="1.2.4",
             codex_sdk_version="1.2.4",
@@ -57,10 +71,10 @@ class UpstreamCodexReleaseTest(unittest.TestCase):
             pr_exists=False,
         )
 
-        self.assertFalse(decision.should_update)
-        self.assertIn("branch automation/codex-v1.2.4 already exists", decision.reason)
+        self.assertTrue(decision.should_update)
+        self.assertIn("update and revalidate", decision.reason)
 
-    def test_skips_when_open_pr_exists(self) -> None:
+    def test_updates_when_open_pr_exists(self) -> None:
         decision = decide_release(
             version="1.2.4",
             codex_sdk_version="1.2.4",
@@ -71,8 +85,8 @@ class UpstreamCodexReleaseTest(unittest.TestCase):
             pr_exists=True,
         )
 
-        self.assertFalse(decision.should_update)
-        self.assertIn("open PR already exists", decision.reason)
+        self.assertTrue(decision.should_update)
+        self.assertIn("update and revalidate", decision.reason)
 
 
 if __name__ == "__main__":

@@ -71,6 +71,26 @@ jobs:
         if: ${{ steps.discover.outputs.should_update != 'true' }}
         run: echo "${{ steps.discover.outputs.skip_reason }}"
 
+      - name: Close superseded automated PRs
+        if: ${{ github.event.inputs.dry_run != 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.CODEX_RELEASE_AUTOMATION_TOKEN || github.token }}
+        run: |
+          python3 scripts/codex_release_prs.py close-superseded \
+            --target-version "${{ steps.discover.outputs.version }}" \
+            --repo "${{ github.repository }}"
+
+      - name: Require automation token
+        if: ${{ steps.discover.outputs.should_update == 'true' && github.event.inputs.dry_run != 'true' }}
+        env:
+          CODEX_RELEASE_AUTOMATION_TOKEN: ${{ secrets.CODEX_RELEASE_AUTOMATION_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${CODEX_RELEASE_AUTOMATION_TOKEN}" ]; then
+            echo "::error::Set CODEX_RELEASE_AUTOMATION_TOKEN to a GitHub App token or fine-grained PAT so release PR pushes trigger pull_request CI before auto-merge."
+            exit 1
+          fi
+
       - name: Bump package versions
         if: ${{ steps.discover.outputs.should_update == 'true' }}
         run: python3 scripts/bump_codex_version.py "${{ steps.discover.outputs.version }}"
@@ -120,9 +140,11 @@ jobs:
           EOF
 
       - name: Create update pull request
+        id: create_pr
         if: ${{ steps.discover.outputs.should_update == 'true' && github.event.inputs.dry_run != 'true' }}
         uses: peter-evans/create-pull-request@v7
         with:
+          token: ${{ secrets.CODEX_RELEASE_AUTOMATION_TOKEN }}
           branch: ${{ steps.discover.outputs.branch }}
           base: main
           title: ${{ steps.discover.outputs.pr_title }}
@@ -130,6 +152,22 @@ jobs:
           body-path: /tmp/codex-pr-body.md
           labels: automated-codex-release
           delete-branch: true
+
+      - name: Enable squash auto-merge
+        if: ${{ steps.discover.outputs.should_update == 'true' && github.event.inputs.dry_run != 'true' && steps.create_pr.outputs.pull-request-number != '' }}
+        env:
+          GH_TOKEN: ${{ secrets.CODEX_RELEASE_AUTOMATION_TOKEN }}
+          PR_NUMBER: ${{ steps.create_pr.outputs.pull-request-number }}
+          VERSION: ${{ steps.discover.outputs.version }}
+        run: |
+          set -euo pipefail
+          gh pr merge "${PR_NUMBER}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --auto \
+            --squash \
+            --delete-branch \
+            --subject "Update Codex SDK target to ${VERSION}" \
+            --body "Automated Codex SDK release for upstream Codex ${VERSION}."
 
       - name: Dry-run complete
         if: ${{ steps.discover.outputs.should_update == 'true' && github.event.inputs.dry_run == 'true' }}

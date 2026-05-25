@@ -38,7 +38,11 @@ Go modules are published by tags, not a package index. Because the Go module is 
 
 ## Release Flow
 
-The scheduled `Upstream Codex Release` workflow polls npm for stable `@openai/codex` releases. When a new stable version is available and the matching `@openai/codex-sdk` version is published, it bumps all package manifests, regenerates lock files, runs Codex schema smoke tests, runs `npm run check`, and opens a PR labeled `automated-codex-release`.
+The scheduled `Upstream Codex Release` workflow polls npm for stable `@openai/codex` releases. When a new stable version is available and the matching `@openai/codex-sdk` version is published, it bumps all package manifests, regenerates lock files, runs Codex schema smoke tests, runs `npm run check`, and opens or updates a PR labeled `automated-codex-release`.
+
+Set repository secret `CODEX_RELEASE_AUTOMATION_TOKEN` to a GitHub App token or fine-grained PAT with contents and pull request write access. The release workflow uses that token for the release PR commit and auto-merge setup so normal `pull_request` CI runs before the PR can merge. Keep repository auto-merge enabled and branch protection requiring the CI jobs that must pass before automated Codex release PRs merge.
+
+The workflow closes older open `automated-codex-release` PRs once a newer stable target exists. The newest eligible PR is configured for squash auto-merge after the release workflow's own validation passes; GitHub completes the merge only after required PR checks pass.
 
 After that PR is merged to `main`, `Auto Release After Codex PR` validates that the merged package versions match the PR title, creates a GitHub release tagged `v<version>`, such as `v0.130.0`, and dispatches the existing release workflow. The release workflow then validates the tag, builds package artifacts, publishes to npm, PyPI, Hex, and GHCR, and creates the Go module tag.
 
